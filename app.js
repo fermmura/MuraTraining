@@ -315,26 +315,31 @@ function clientAreaHTML(client, editable) {
 
 function exerciseHTML(ex, editable) {
   return `
-    <div class="ex-card" data-exid="${ex.id}">
-      <div class="ex-top">
-        ${
-          editable
-            ? `<input class="ex-name" data-field="name" placeholder="Exercício" value="${attr(ex.name)}" />`
-            : `<div class="ex-name">${escapeHTML(ex.name || "Exercício")}</div>`
-        }
-        ${editable ? `<button class="rm-x" data-rmex="${ex.id}">✕</button>` : ""}
+    <details class="ex-card" data-exid="${ex.id}">
+      <summary class="ex-top" style="cursor:pointer; list-style:none; display:flex; align-items:center; justify-space-between; user-select:none;">
+        <div style="display:flex; align-items:center; gap:8px; flex:1;">
+          <span class="ex-arrow" style="font-size:12px; transition:transform 0.2s;">▼</span>
+          ${
+            editable
+              ? `<input class="ex-name" data-field="name" placeholder="Exercício" value="${attr(ex.name)}" onclick="event.stopPropagation();" />`
+              : `<div class="ex-name" style="font-weight:bold;">${escapeHTML(ex.name || "Exercício")}</div>`
+          }
+        </div>
+        ${editable ? `<button class="rm-x" data-rmex="${ex.id}" onclick="event.stopPropagation();">✕</button>` : ""}
+      </summary>
+      <div class="ex-content" style="padding-top:12px;">
+        <div class="notes-box">
+          <label>ANOTAÇÕES</label>
+          <textarea rows="3" data-field="notes" placeholder="ex.: preparatória com 2 séries leves de 15 reps; trabalho com cadência 2-0-2, descanso 90s"
+            ${editable ? "" : "readonly"}>${escapeHTML(ex.notes || "")}</textarea>
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:700;color:var(--muted);">SÉRIES DE TRABALHO</label>
+          ${(ex.sets || []).map((s, i) => setRowHTML(ex.id, s, i, editable)).join("")}
+          ${editable ? `<button class="dashed-btn" data-addset="${ex.id}" style="margin-top:6px;">+ série</button>` : ""}
+        </div>
       </div>
-      <div class="notes-box">
-        <label>ANOTAÇÕES</label>
-        <textarea rows="3" data-field="notes" placeholder="ex.: preparatória com 2 séries leves de 15 reps; trabalho com cadência 2-0-2, descanso 90s"
-          ${editable ? "" : "readonly"}>${escapeHTML(ex.notes || "")}</textarea>
-      </div>
-      <div>
-        <label style="font-size:11px;font-weight:700;color:var(--muted);">SÉRIES DE TRABALHO</label>
-        ${(ex.sets || []).map((s, i) => setRowHTML(ex.id, s, i, editable)).join("")}
-        ${editable ? `<button class="dashed-btn" data-addset="${ex.id}" style="margin-top:6px;">+ série</button>` : ""}
-      </div>
-    </div>`;
+    </details>`;
 }
 
 function setRowHTML(exId, s, i, editable) {
@@ -511,16 +516,12 @@ function wireClientArea(client, editable) {
       };
     }
 
-    // campos que não são reps/kg ficam travados fora do modo editável
     if (!editable) {
       row.querySelectorAll("[data-field]").forEach((input) => {
-        // reps e kg continuam liberados; nada a fazer aqui, já são editáveis por padrão
+        // reps e kg continuam liberados
       });
     }
   });
-
-  // fora das set-rows, tudo trava se não editável (nome do exercício, notas, título do dia etc. já
-  // são renderizados como texto/readonly quando editable=false — ver funções acima)
 }
 
 // ---------- utilitários ----------
