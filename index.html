@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Meu Treino</title>
+
+<!-- PWA: instalável como app, tela cheia, sem barra de navegador -->
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#17161A" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Meu Treino" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;500;600;700&display=swap');
+  :root {
+    --bg: #17161A; --panel: #211F25; --panelAlt: #2A2830; --line: #3A3742;
+    --chalk: #F3EFE6; --muted: #9A94A6; --red: #FF4433; --redDim: #5C2620;
+    --steel: #4C86B4; --plate: #E8B94A;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--chalk); font-family: 'Inter', system-ui, sans-serif;
+    min-height: 100vh; -webkit-tap-highlight-color: transparent; }
+  .display { font-family: 'Anton', 'Inter', sans-serif; letter-spacing: .03em; }
+  input, textarea, button { font-family: inherit; }
+  input, textarea { background: transparent; border: none; outline: none; color: var(--chalk); }
+  input::placeholder, textarea::placeholder { color: var(--muted); }
+  button { cursor: pointer; border: none; background: none; color: inherit; }
+  .hidden { display: none !important; }
+  #app { max-width: 900px; margin: 0 auto; padding: 16px; padding-bottom: 60px; }
+
+  /* portão de login */
+  .gate { display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 80px 16px; gap: 14px; text-align: center; }
+  .gate input { width: 100%; max-width: 260px; background: var(--panel); border: 1px solid var(--line) !important;
+    padding: 10px 12px; border-radius: 8px; font-size: 15px; }
+  .gate button.primary { width: 100%; max-width: 260px; background: var(--red); color: #fff;
+    padding: 10px; border-radius: 10px; font-size: 15px; margin-top: 4px; }
+  .gate .error { color: var(--red); font-size: 13px; }
+  .gate .switch { color: var(--muted); font-size: 13px; text-decoration: underline; margin-top: 6px; }
+
+  /* topo */
+  .topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+  .topbar .name { font-size: 22px; }
+  .badge { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 20px; padding: 3px 10px; }
+  .logout { color: var(--muted); font-size: 12px; border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; }
+
+  /* sidebar admin */
+  .layout { display: flex; gap: 0; }
+  .sidebar { width: 230px; flex-shrink: 0; background: var(--panel); border-right: 1px solid var(--line);
+    padding: 16px; border-radius: 12px 0 0 12px; }
+  .sidebar h1 { font-size: 20px; margin: 0 0 12px; }
+  .client-row { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: 8px; cursor: pointer;
+    border: 1px solid transparent; margin-bottom: 4px; }
+  .client-row.active { background: var(--redDim); border-color: var(--red); }
+  .client-row .cn { font-size: 14px; font-weight: 600; }
+  .client-row .ce { font-size: 11px; color: var(--muted); }
+  .main { flex: 1; padding: 20px; background: var(--panel); border-radius: 0 12px 12px 0; }
+  .main.solo { border-radius: 12px; }
+
+  /* grade de treinos */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px,1fr)); gap: 12px; }
+  .sq { aspect-ratio: 1/1; background: var(--panelAlt); border: 1px solid var(--line); border-radius: 12px;
+    padding: 12px; display: flex; flex-direction: column; justify-content: space-between; cursor: pointer; position: relative; }
+  .sq .rm { position: absolute; top: 8px; right: 8px; color: var(--muted); }
+  .sq .title { font-size: 16px; }
+  .sq .count { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .sq.add { align-items: center; justify-content: center; border-style: dashed; color: var(--muted); }
+
+  /* detalhe do treino */
+  .day-head { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+  .back { border: 1px solid var(--line); color: var(--muted); border-radius: 6px; padding: 5px 10px; font-size: 13px; flex-shrink:0; }
+  .day-title { flex: 1; font-size: 20px; }
+
+  .ex-card { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; }
+  .ex-top { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .ex-name { flex: 1; font-size: 14px; font-weight: 600; }
+  .notes-box { background: var(--panelAlt); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; }
+  .notes-box label { font-size: 11px; font-weight: 700; color: var(--muted); letter-spacing: .05em; display: block; margin-bottom: 4px; }
+  .notes-box textarea { width: 100%; font-size: 13px; resize: none; }
+
+  .set-row { display: flex; align-items: center; gap: 10px; background: var(--panelAlt); border-radius: 8px; padding: 6px 10px; margin-bottom: 6px; flex-wrap: wrap; }
+  .set-idx { font-size: 11px; color: var(--muted); width: 18px; }
+  .box { width: 34px; height: 34px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+    display: flex; align-items: center; justify-content: center; }
+  .box.kg { width: 44px; }
+  .box input { width: 100%; text-align: center; font-size: 14px; }
+  .unit { font-size: 13px; color: var(--muted); }
+  .flames { display: flex; gap: 2px; margin-left: auto; }
+  .flames button { font-size: 15px; opacity: .35; }
+  .flames button.on { opacity: 1; }
+  .rm-x { color: var(--muted); }
+
+  .dashed-btn { border: 1px dashed var(--line); color: var(--muted); border-radius: 8px; padding: 6px 12px; font-size: 13px; display: inline-flex; align-items: center; gap: 4px; }
+  .cta { background: var(--red); color: #fff; border-radius: 10px; padding: 10px; font-size: 14px; width: 100%; }
+  .muted-note { color: var(--muted); font-size: 13px; }
+  .copy-btn { font-size: 11px; border: 1px solid var(--line); color: var(--muted); border-radius: 6px; padding: 2px 6px; }
+
+  @media (max-width: 700px) {
+    .layout { flex-direction: column; }
+    .sidebar { width: 100%; border-radius: 12px 12px 0 0; border-right: none; border-bottom: 1px solid var(--line); }
+    .main { border-radius: 0 0 12px 12px; }
+  }
+</style>
+</head>
+<body>
+  <div id="app">
+    <p style="text-align:center;color:#9A94A6;padding-top:60px;">Carregando…</p>
+  </div>
+
+  <!-- Firebase (SDK compat, sem precisar de bundler) -->
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+
+  <script src="firebase-config.js"></script>
+  <script src="app.js"></script>
+
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('service-worker.js').catch(() => {});
+      });
+    }
+  </script>
+</body>
+</html>

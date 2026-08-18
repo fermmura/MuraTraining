@@ -1,0 +1,32 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Email do personal (deve bater com TRAINER_EMAIL em firebase-config.js)
+    function isTrainer() {
+      return request.auth != null &&
+             request.auth.token.email == "fermmura@gmail.com";
+    }
+
+    function isOwner(resource) {
+      return request.auth != null &&
+             request.auth.token.email == resource.data.email;
+    }
+
+    match /clients/{clientId} {
+      // o personal pode ler e escrever tudo
+      allow read, write: if isTrainer();
+
+      // o aluno só pode ler a própria ficha
+      allow read: if isOwner(resource);
+
+      // o aluno só pode escrever se nome, email e objetivo continuarem
+      // iguais (ou seja: só mexe no conteúdo dos treinos, reps e kg —
+      // a interface do app já trava o resto, e isso reforça no servidor)
+      allow update: if isOwner(resource) &&
+        request.resource.data.name == resource.data.name &&
+        request.resource.data.email == resource.data.email &&
+        request.resource.data.goal == resource.data.goal;
+    }
+  }
+}
