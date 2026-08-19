@@ -22,7 +22,8 @@
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--chalk); font-family: 'Inter', system-ui, sans-serif;
-    min-height: 100vh; -webkit-tap-highlight-color: transparent; }
+    min-height: 100vh; -webkit-tap-highlight-color: transparent;
+    padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
   .display { font-family: 'Anton', 'Inter', sans-serif; letter-spacing: .03em; }
   input, textarea, button { font-family: inherit; }
   input, textarea { background: transparent; border: none; outline: none; color: var(--chalk); }
