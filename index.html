@@ -190,7 +190,22 @@
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('service-worker.js').catch(() => {});
+        navigator.serviceWorker.register('service-worker.js').then((reg) => {
+          // checa por atualização sempre que o app volta pra frente
+          // (útil pra quem instalou como app e deixa aberto em segundo plano por dias)
+          document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') reg.update().catch(() => {});
+          });
+        }).catch(() => {});
+      });
+
+      // assim que uma versão nova assumir o controle, recarrega a tela
+      // automaticamente (uma única vez) pra já mostrar o conteúdo atualizado
+      let refreshing = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (refreshing) return;
+        refreshing = true;
+        window.location.reload();
       });
     }
   </script>
