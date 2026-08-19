@@ -348,20 +348,17 @@ function setRowHTML(exId, s, i, editable) {
   return `
     <div class="set-row" data-setid="${s.id}" data-exid="${exId}">
       <span class="set-idx">${i + 1}ª</span>
-      <span style="display:flex;flex-direction:column;align-items:center;gap:1px;color:var(--plate);flex-shrink:0;">
+      <span class="stack" style="color:var(--plate);">
         <span class="box meta"><input data-field="repsGoal" value="${attr(goal)}" placeholder="meta" ${editable ? "" : "readonly"} /></span>
-        <span class="unit" style="font-size:9px;line-height:1;">meta</span>
+        <span class="unit">meta</span>
       </span>
-      <span style="display:flex;align-items:center;gap:3px;color:var(--chalk);flex-shrink:0;">
+      <span class="stack" style="color:var(--chalk);">
         <span class="box"><input data-field="repsDone" value="${attr(s.repsDone)}" placeholder="0" /></span>
         <span class="unit">feito</span>
       </span>
-      <span style="display:flex;align-items:center;gap:3px;color:var(--steel);flex-shrink:0;">
+      <span class="stack" style="color:var(--steel);">
         <span class="box kg"><input data-field="load" value="${attr(s.load)}" /></span>
         <span class="unit">kg</span>
-      </span>
-      <span class="flames">
-        ${[1, 2, 3, 4, 5].map((lvl) => `<button data-flame="${lvl}" class="${lvl <= (s.intensity || 0) ? "on" : ""}">🔥</button>`).join("")}
       </span>
       ${editable ? `<button class="rm-x" data-rmset="1">✕</button>` : ""}
     </div>`;
@@ -485,30 +482,6 @@ function wireClientArea(client, editable) {
             exercises: (d.exercises || []).map((ex) => {
               if (ex.id !== exId) return ex;
               return { ...ex, sets: (ex.sets || []).map((s) => (s.id === setId ? { ...s, [field]: input.value } : s)) };
-            }),
-          };
-        });
-        updateDays(client, days);
-      };
-    });
-
-    row.querySelectorAll("[data-flame]").forEach((btn) => {
-      if (!editable) { btn.disabled = true; btn.style.opacity = btn.classList.contains("on") ? "1" : ".2"; return; }
-      btn.onclick = () => {
-        const lvl = Number(btn.dataset.flame);
-        const days = (client.days || []).map((d) => {
-          if (d.id !== ui.activeDayId) return d;
-          return {
-            ...d,
-            exercises: (d.exercises || []).map((ex) => {
-              if (ex.id !== exId) return ex;
-              return {
-                ...ex,
-                sets: (ex.sets || []).map((s) => {
-                  if (s.id !== setId) return s;
-                  return { ...s, intensity: s.intensity === lvl ? 0 : lvl };
-                }),
-              };
             }),
           };
         });
