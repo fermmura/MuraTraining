@@ -353,7 +353,12 @@ function setRowHTML(exId, s, i, editable) {
         <span class="unit">meta</span>
       </span>
       <span class="stack" style="color:var(--chalk);position:relative;">
-        <button type="button" class="box feito-btn" data-donepick="${exId}|${s.id}">${escapeHTML(s.repsDone || "–")}</button>
+        <select class="box feito-select" data-field="repsDone">
+          <option value="" ${!s.repsDone ? "selected" : ""}>–</option>
+          ${Array.from({ length: 15 }, (_, n) => n + 1)
+            .map((n) => `<option value="${n}" ${String(s.repsDone) === String(n) ? "selected" : ""}>${n}</option>`)
+            .join("")}
+        </select>
         <span class="unit">feito</span>
       </span>
       <span class="stack" style="color:var(--steel);">
@@ -495,14 +500,8 @@ function wireClientArea(client, editable) {
       input.oninput = () => growBox(input);
     });
 
-    // "feito" abre um seletor rápido de números (1 a 15) em vez de digitar
-    const doneBtn = row.querySelector("[data-donepick]");
-    if (doneBtn) {
-      doneBtn.onclick = (e) => {
-        e.stopPropagation();
-        openRepsPicker(doneBtn, exId, setId, client);
-      };
-    }
+    // "feito" agora é um <select> nativo — o salvamento já é tratado
+    // pelo loop genérico de [data-field] logo acima.
 
     if (editable) {
       const rmSetBtn = row.querySelector("[data-rmset]");
@@ -543,51 +542,6 @@ function growBox(input) {
   box.style.width = Math.max(30, len * 11 + 22) + "px";
 }
 
-// ---------- seletor rápido de números (1 a 15) pro campo "feito" ----------
-
-function closeRepsPicker() {
-  document.querySelectorAll(".reps-picker").forEach((p) => p.remove());
-}
-
-function openRepsPicker(btn, exId, setId, client) {
-  const already = btn.parentElement.querySelector(".reps-picker");
-  closeRepsPicker();
-  if (already) return; // clicar de novo no mesmo botão só fecha
-
-  const popup = document.createElement("div");
-  popup.className = "reps-picker";
-  popup.innerHTML = Array.from({ length: 15 }, (_, i) => i + 1)
-    .map((n) => `<button type="button" data-pick="${n}">${n}</button>`)
-    .join("");
-  btn.parentElement.appendChild(popup);
-
-  popup.querySelectorAll("[data-pick]").forEach((numBtn) => {
-    numBtn.onclick = (e) => {
-      e.stopPropagation();
-      const value = numBtn.dataset.pick;
-      const days = (client.days || []).map((d) => {
-        if (d.id !== ui.activeDayId) return d;
-        return {
-          ...d,
-          exercises: (d.exercises || []).map((ex) => {
-            if (ex.id !== exId) return ex;
-            return { ...ex, sets: (ex.sets || []).map((s) => (s.id === setId ? { ...s, repsDone: value } : s)) };
-          }),
-        };
-      });
-      updateDays(client, days);
-    };
-  });
-
-  setTimeout(() => {
-    document.addEventListener("click", function onDocClick(ev) {
-      if (!popup.contains(ev.target) && ev.target !== btn) {
-        popup.remove();
-        document.removeEventListener("click", onDocClick);
-      }
-    });
-  }, 0);
-}
 
 // ---------- utilitários ----------
 
