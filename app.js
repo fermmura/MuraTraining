@@ -290,7 +290,7 @@ function clientAreaHTML(client, editable) {
              </div>`
           : ""
       }
-      <div class="grid">
+      <div class="grid ${editable ? "" : "stacked"}">
         ${(client.days || [])
           .map(
             (d) => `

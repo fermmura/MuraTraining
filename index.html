@@ -70,6 +70,12 @@
   .sq .count { font-size: 11px; color: var(--muted); margin-top: 2px; }
   .sq.add { align-items: center; justify-content: center; border-style: dashed; color: var(--muted); }
 
+  /* tela do aluno: um bloco embaixo do outro, centralizado e maior */
+  .grid.stacked { grid-template-columns: 1fr; max-width: 360px; margin: 0 auto; gap: 16px; }
+  .grid.stacked .sq { aspect-ratio: auto; min-height: 100px; padding: 20px 24px; flex-direction: row; align-items: center; gap: 16px; }
+  .grid.stacked .sq .title { font-size: 22px; }
+  .grid.stacked .sq .count { font-size: 14px; margin-top: 4px; }
+
   /* detalhe do treino */
   .day-head { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
   .back { border: 1px solid var(--line); color: var(--muted); border-radius: 8px; padding: 8px 14px; font-size: 15px; flex-shrink:0; }
