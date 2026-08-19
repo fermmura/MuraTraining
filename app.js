@@ -24,6 +24,8 @@ let myClient = null; // só preenchido para o aluno
 let unsubscribe = null;
 
 let ui = { view: "loading", selectedId: null, activeDayId: null };
+let collapsedEx = {}; // exercícios minimizados; por padrão, todo exercício começa minimizado
+const isCollapsed = (exId) => collapsedEx[exId] !== false;
 
 // ---------- autenticação ----------
 
@@ -109,7 +111,7 @@ function saveClient(id, patch) {
   db.collection("clients").doc(id).update(patch).catch((e) => alert("Erro ao salvar: " + e.message));
 }
 
-function emptySet() { return { id: uid(), reps: "10", load: "", intensity: 0 }; }
+function emptySet() { return { id: uid(), repsGoal: "10", repsDone: "", load: "", intensity: 0 }; }
 function emptyExercise() { return { id: uid(), name: "", notes: "", sets: [emptySet()] }; }
 function emptyDay(title) { return { id: uid(), title, exercises: [] }; }
 
@@ -314,20 +316,19 @@ function clientAreaHTML(client, editable) {
 }
 
 function exerciseHTML(ex, editable) {
+  const collapsed = isCollapsed(ex.id);
   return `
-    <details class="ex-card" data-exid="${ex.id}">
-      <summary class="ex-top" style="cursor:pointer; list-style:none; display:flex; align-items:center; justify-space-between; user-select:none;">
-        <div style="display:flex; align-items:center; gap:8px; flex:1;">
-          <span class="ex-arrow" style="font-size:12px; transition:transform 0.2s;">▼</span>
-          ${
-            editable
-              ? `<input class="ex-name" data-field="name" placeholder="Exercício" value="${attr(ex.name)}" onclick="event.stopPropagation();" />`
-              : `<div class="ex-name" style="font-weight:bold;">${escapeHTML(ex.name || "Exercício")}</div>`
-          }
-        </div>
-        ${editable ? `<button class="rm-x" data-rmex="${ex.id}" onclick="event.stopPropagation();">✕</button>` : ""}
-      </summary>
-      <div class="ex-content" style="padding-top:12px;">
+    <div class="ex-card" data-exid="${ex.id}">
+      <div class="ex-top">
+        ${
+          editable
+            ? `<input class="ex-name" data-field="name" placeholder="Exercício" value="${attr(ex.name)}" />`
+            : `<div class="ex-name">${escapeHTML(ex.name || "Exercício")}</div>`
+        }
+        ${editable ? `<button class="rm-x" data-rmex="${ex.id}">✕</button>` : ""}
+        <button class="ex-toggle ${collapsed ? "collapsed" : ""}" data-toggle="${ex.id}" aria-label="Abrir/fechar exercício">▾</button>
+      </div>
+      <div class="ex-body ${collapsed ? "hidden" : ""}">
         <div class="notes-box">
           <label>ANOTAÇÕES</label>
           <textarea rows="3" data-field="notes" placeholder="ex.: preparatória com 2 séries leves de 15 reps; trabalho com cadência 2-0-2, descanso 90s"
@@ -339,18 +340,23 @@ function exerciseHTML(ex, editable) {
           ${editable ? `<button class="dashed-btn" data-addset="${ex.id}" style="margin-top:6px;">+ série</button>` : ""}
         </div>
       </div>
-    </details>`;
+    </div>`;
 }
 
 function setRowHTML(exId, s, i, editable) {
+  const goal = s.repsGoal ?? s.reps ?? ""; // compatível com fichas antigas (campo único "reps")
   return `
     <div class="set-row" data-setid="${s.id}" data-exid="${exId}">
       <span class="set-idx">${i + 1}ª</span>
-      <span style="display:flex;align-items:center;gap:6px;color:var(--plate);">
-        <span class="box"><input data-field="reps" value="${attr(s.reps)}" /></span>
-        <span class="unit">reps</span>
+      <span style="display:flex;align-items:center;gap:3px;color:var(--plate);flex-shrink:0;">
+        <span class="box meta"><input data-field="repsGoal" value="${attr(goal)}" placeholder="meta" ${editable ? "" : "readonly"} /></span>
+        <span class="unit">meta</span>
       </span>
-      <span style="display:flex;align-items:center;gap:6px;color:var(--steel);">
+      <span style="display:flex;align-items:center;gap:3px;color:var(--chalk);flex-shrink:0;">
+        <span class="box"><input data-field="repsDone" value="${attr(s.repsDone)}" placeholder="0" /></span>
+        <span class="unit">feito</span>
+      </span>
+      <span style="display:flex;align-items:center;gap:3px;color:var(--steel);flex-shrink:0;">
         <span class="box kg"><input data-field="load" value="${attr(s.load)}" /></span>
         <span class="unit">kg</span>
       </span>
@@ -419,6 +425,14 @@ function wireClientArea(client, editable) {
         d.id === ui.activeDayId ? { ...d, exercises: (d.exercises || []).filter((ex) => ex.id !== btn.dataset.rmex) } : d
       );
       updateDays(client, days);
+    };
+  });
+
+  document.querySelectorAll("[data-toggle]").forEach((btn) => {
+    btn.onclick = () => {
+      const exId = btn.dataset.toggle;
+      collapsedEx[exId] = !isCollapsed(exId);
+      render();
     };
   });
 
@@ -516,12 +530,16 @@ function wireClientArea(client, editable) {
       };
     }
 
+    // campos que não são reps/kg ficam travados fora do modo editável
     if (!editable) {
       row.querySelectorAll("[data-field]").forEach((input) => {
-        // reps e kg continuam liberados
+        // reps e kg continuam liberados; nada a fazer aqui, já são editáveis por padrão
       });
     }
   });
+
+  // fora das set-rows, tudo trava se não editável (nome do exercício, notas, título do dia etc. já
+  // são renderizados como texto/readonly quando editable=false — ver funções acima)
 }
 
 // ---------- utilitários ----------
