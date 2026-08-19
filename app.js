@@ -23,7 +23,7 @@ let clients = []; // só preenchido para o treinador
 let myClient = null; // só preenchido para o aluno
 let unsubscribe = null;
 
-let ui = { view: "loading", selectedId: null, activeDayId: null };
+let ui = { view: "loading", selectedId: null, activeDayId: null, progOpen: false, progMode: "table", progKey: null };
 let collapsedEx = {}; // exercícios minimizados; por padrão, todo exercício começa minimizado
 const isCollapsed = (exId) => collapsedEx[exId] !== false;
 
@@ -276,11 +276,20 @@ function studentHTML() {
 // ---------------- ÁREA DE TREINOS (compartilhada treinador/aluno) ----------------
 
 function clientAreaHTML(client, editable) {
+  if (editable && ui.progOpen) return progressionHTML(client);
+
   const day = (client.days || []).find((d) => d.id === ui.activeDayId);
 
   if (!day) {
     return `
-      ${editable ? `<button class="dashed-btn" id="open-import-modal" style="margin-bottom:12px;">📋 Importar treino (colar texto)</button>` : ""}
+      ${
+        editable
+          ? `<div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
+               <button class="dashed-btn" id="open-import-modal">📋 Importar treino (colar texto)</button>
+               <button class="dashed-btn" id="open-progression">📈 Progressão</button>
+             </div>`
+          : ""
+      }
       <div class="grid">
         ${(client.days || [])
           .map(
@@ -382,7 +391,20 @@ function setRowHTML(exId, s, i, editable) {
 function wireClientArea(client, editable) {
   if (!client) return;
 
+  if (editable && ui.progOpen) {
+    wireProgression(client);
+    return;
+  }
+
   if (editable) wireImportModal(client);
+
+  const openProgBtn = document.getElementById("open-progression");
+  if (openProgBtn) {
+    openProgBtn.onclick = () => {
+      ui.progOpen = true;
+      render();
+    };
+  }
 
   // grade
   document.querySelectorAll("[data-open]").forEach((sq) => {
@@ -506,18 +528,7 @@ function wireClientArea(client, editable) {
 
     row.querySelectorAll("[data-field]").forEach((input) => {
       input.onchange = () => {
-        const field = input.dataset.field;
-        const days = (client.days || []).map((d) => {
-          if (d.id !== ui.activeDayId) return d;
-          return {
-            ...d,
-            exercises: (d.exercises || []).map((ex) => {
-              if (ex.id !== exId) return ex;
-              return { ...ex, sets: (ex.sets || []).map((s) => (s.id === setId ? { ...s, [field]: input.value } : s)) };
-            }),
-          };
-        });
-        updateDays(client, days);
+        saveSetField(client, ui.activeDayId, exId, setId, input.dataset.field, input.value);
       };
     });
 
@@ -563,7 +574,74 @@ function wireClientArea(client, editable) {
   // são renderizados como texto/readonly quando editable=false — ver funções acima)
 }
 
-// ---------- importar treino colando texto ----------
+// ---------- histórico de progressão (reps/kg por semana) ----------
+
+function todayKey() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function weekKeyOf(dateKey) {
+  const d = new Date(dateKey + "T00:00:00");
+  const day = d.getDay();
+  const diff = day === 0 ? -6 : 1 - day; // volta pra segunda-feira daquela semana
+  const monday = new Date(d);
+  monday.setDate(d.getDate() + diff);
+  return monday.toISOString().slice(0, 10);
+}
+
+// aplica a mudança de um campo (reps/kg/etc.) numa série e, se for reps/kg,
+// já grava uma entrada no histórico (substituindo qualquer entrada da mesma
+// série feita no mesmo dia, pra não acumular lixo com múltiplas edições)
+function applySetFieldChange(client, dayId, exId, setId, field, value) {
+  let dayTitle = "", exName = "", setIndex = 0;
+  const days = (client.days || []).map((d) => {
+    if (d.id !== dayId) return d;
+    dayTitle = d.title;
+    return {
+      ...d,
+      exercises: (d.exercises || []).map((ex) => {
+        if (ex.id !== exId) return ex;
+        exName = ex.name;
+        return {
+          ...ex,
+          sets: (ex.sets || []).map((s, i) => {
+            if (s.id !== setId) return s;
+            setIndex = i;
+            return { ...s, [field]: value };
+          }),
+        };
+      }),
+    };
+  });
+
+  let history = client.history || [];
+  if (field === "repsDone" || field === "load") {
+    const dateKey = todayKey();
+    history = history.filter((h) => !(h.setId === setId && h.dateKey === dateKey));
+    const day = days.find((d) => d.id === dayId);
+    const ex = day?.exercises.find((e) => e.id === exId);
+    const set = ex?.sets.find((s) => s.id === setId);
+    history = [
+      ...history,
+      {
+        dateKey,
+        weekKey: weekKeyOf(dateKey),
+        dayId, dayTitle, exId, exName, setId, setIndex,
+        repsGoal: set?.repsGoal || "",
+        repsDone: set?.repsDone || "",
+        load: set?.load || "",
+      },
+    ];
+  }
+  return { days, history };
+}
+
+function saveSetField(client, dayId, exId, setId, field, value) {
+  const { days, history } = applySetFieldChange(client, dayId, exId, setId, field, value);
+  saveClient(client.id, { days, history });
+}
+
+
 
 const WEEKDAY_RE = /^\*?\s*(segunda|ter[cç]a|quarta|quinta|sexta|s[aá]bado|domingo)[\s-]*(feira)?[^*]*\*?$/i;
 
@@ -734,23 +812,191 @@ function openFeitoPicker(client, exId, setId, currentVal) {
   el.querySelectorAll("[data-num]").forEach((item) => {
     item.onclick = () => {
       const value = item.dataset.num;
-      const days = (client.days || []).map((d) => {
-        if (d.id !== ui.activeDayId) return d;
-        return {
-          ...d,
-          exercises: (d.exercises || []).map((ex) => {
-            if (ex.id !== exId) return ex;
-            return { ...ex, sets: (ex.sets || []).map((s) => (s.id === setId ? { ...s, repsDone: value } : s)) };
-          }),
-        };
-      });
-      updateDays(client, days);
+      saveSetField(client, ui.activeDayId, exId, setId, "repsDone", value);
       closeFeitoPicker();
     };
   });
 
   document.getElementById("fp-backdrop").onclick = closeFeitoPicker;
   document.getElementById("fp-cancel").onclick = closeFeitoPicker;
+}
+
+// ---------- tela de progressão (tabela + gráfico, só treinador) ----------
+
+function weekLabel(weekKey) {
+  const d = new Date(weekKey + "T00:00:00");
+  const day = String(d.getDate()).padStart(2, "0");
+  const months = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
+  return `${day}/${months[d.getMonth()]}`;
+}
+
+function buildHistoryIndex(client) {
+  const hist = client.history || [];
+  const bySet = {};
+  for (const h of hist) {
+    if (!bySet[h.setId]) {
+      bySet[h.setId] = { setId: h.setId, exId: h.exId, label: `${h.exName || "Exercício"} (${h.setIndex + 1}ª)`, dayTitle: h.dayTitle, entries: [] };
+    }
+    bySet[h.setId].entries.push(h);
+  }
+  return Object.values(bySet);
+}
+
+function allWeekKeys(client) {
+  const set = new Set((client.history || []).map((h) => h.weekKey));
+  return Array.from(set).sort();
+}
+
+function latestInWeek(entries, weekKey) {
+  const inWeek = entries.filter((e) => e.weekKey === weekKey);
+  if (inWeek.length === 0) return null;
+  return inWeek.reduce((a, b) => (a.dateKey > b.dateKey ? a : b));
+}
+
+function progressionHTML(client) {
+  const rows = buildHistoryIndex(client);
+  const weeks = allWeekKeys(client).slice(-8);
+  return `
+    <div class="day-head">
+      <button class="back" id="prog-back">‹ Aluno</button>
+      <div class="display day-title">Progressão</div>
+    </div>
+    <div style="display:flex; gap:8px; margin-bottom:14px;">
+      <button class="dashed-btn" id="prog-tab-table" style="${ui.progMode === "table" ? "border-style:solid;color:var(--chalk);" : ""}">Tabela</button>
+      <button class="dashed-btn" id="prog-tab-chart" style="${ui.progMode === "chart" ? "border-style:solid;color:var(--chalk);" : ""}">Gráfico</button>
+    </div>
+    ${
+      rows.length === 0
+        ? `<p class="muted-note">Ainda não há histórico. Assim que reps ou kg forem alterados pelo aluno (ou por você), a progressão aparece aqui, semana a semana.</p>`
+        : ui.progMode === "table"
+        ? progTableHTML(rows, weeks)
+        : progChartHTML(rows)
+    }`;
+}
+
+function progTableHTML(rows, weeks) {
+  return `
+    <div style="overflow-x:auto;">
+      <table style="border-collapse:collapse; width:100%; font-size:12px;">
+        <thead>
+          <tr>
+            <th style="text-align:left; padding:6px 10px; color:var(--muted); font-weight:600; white-space:nowrap; position:sticky; left:0; background:var(--panel);">Série</th>
+            ${weeks.map((w) => `<th style="padding:6px 10px; color:var(--muted); font-weight:600; white-space:nowrap;">${weekLabel(w)}</th>`).join("")}
+          </tr>
+        </thead>
+        <tbody>
+          ${rows
+            .map((r) => {
+              let prevVal = null;
+              const cells = weeks
+                .map((w) => {
+                  const e = latestInWeek(r.entries, w);
+                  if (!e) return `<td style="padding:6px 10px; text-align:center; color:var(--line);">—</td>`;
+                  const raw = e.load || e.repsDone || "";
+                  const num = parseFloat(String(raw).replace(",", "."));
+                  let arrow = "";
+                  if (prevVal != null && !isNaN(num)) {
+                    if (num > prevVal) arrow = ` <span style="color:#639922;">▲</span>`;
+                    else if (num < prevVal) arrow = ` <span style="color:#E24B4A;">▼</span>`;
+                  }
+                  if (!isNaN(num)) prevVal = num;
+                  const label = `${e.repsDone || e.repsGoal || "-"}r${e.load ? " · " + e.load + "kg" : ""}`;
+                  return `<td style="padding:6px 10px; text-align:center; white-space:nowrap; color:var(--chalk);">${label}${arrow}</td>`;
+                })
+                .join("");
+              return `<tr style="border-top:1px solid var(--line);">
+                <td style="padding:6px 10px; white-space:nowrap; position:sticky; left:0; background:var(--bg); color:var(--chalk);">${escapeHTML(r.label)}</td>
+                ${cells}
+              </tr>`;
+            })
+            .join("")}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+function progChartHTML(rows) {
+  const selected = ui.progKey && rows.find((r) => r.setId === ui.progKey) ? ui.progKey : rows[0] && rows[0].setId;
+  ui.progKey = selected;
+  return `
+    <select id="prog-select" style="width:100%; margin-bottom:14px; padding:9px; background:var(--panelAlt); border:1px solid var(--line); border-radius:8px; color:var(--chalk); font-size:14px;">
+      ${rows
+        .map((r) => `<option value="${r.setId}" ${r.setId === selected ? "selected" : ""}>${escapeHTML(r.label)}${r.dayTitle ? " — " + escapeHTML(r.dayTitle) : ""}</option>`)
+        .join("")}
+    </select>
+    <div style="position:relative; width:100%; height:240px;">
+      <canvas id="prog-canvas"></canvas>
+    </div>`;
+}
+
+let progChartInstance = null;
+
+function renderProgChart(client) {
+  const canvas = document.getElementById("prog-canvas");
+  if (!canvas || !window.Chart) return;
+  const entries = (client.history || []).filter((h) => h.setId === ui.progKey);
+  const byWeek = {};
+  for (const e of entries) {
+    if (!byWeek[e.weekKey] || e.dateKey > byWeek[e.weekKey].dateKey) byWeek[e.weekKey] = e;
+  }
+  const weeks = Object.keys(byWeek).sort();
+  const labels = weeks.map(weekLabel);
+  const useLoad = weeks.some((w) => byWeek[w].load);
+  const data = weeks.map((w) => {
+    const v = useLoad ? byWeek[w].load : byWeek[w].repsDone;
+    const n = parseFloat(String(v).replace(",", "."));
+    return isNaN(n) ? null : n;
+  });
+
+  if (progChartInstance) progChartInstance.destroy();
+  progChartInstance = new Chart(canvas, {
+    type: "line",
+    data: {
+      labels,
+      datasets: [
+        {
+          data,
+          borderColor: "#FF4433",
+          backgroundColor: "rgba(255,68,51,0.1)",
+          fill: true,
+          tension: 0.3,
+          pointRadius: 4,
+          pointBackgroundColor: "#FF4433",
+          pointBorderColor: "#17161A",
+          pointBorderWidth: 2,
+          borderWidth: 2,
+          spanGaps: true,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        y: { ticks: { color: "#9A94A6", font: { size: 11 } }, grid: { color: "#2A2830" } },
+        x: { ticks: { color: "#9A94A6", font: { size: 11 } }, grid: { display: false } },
+      },
+    },
+  });
+}
+
+function wireProgression(client) {
+  const backBtn = document.getElementById("prog-back");
+  if (backBtn) backBtn.onclick = () => { ui.progOpen = false; render(); };
+
+  const tabTable = document.getElementById("prog-tab-table");
+  const tabChart = document.getElementById("prog-tab-chart");
+  if (tabTable) tabTable.onclick = () => { ui.progMode = "table"; render(); };
+  if (tabChart) tabChart.onclick = () => { ui.progMode = "chart"; render(); };
+
+  if (ui.progMode === "chart") {
+    const select = document.getElementById("prog-select");
+    if (select) {
+      select.onchange = () => { ui.progKey = select.value; render(); };
+      renderProgChart(client);
+    }
+  }
 }
 
 // ---------- crescimento automático dos quadrados meta/kg ----------
