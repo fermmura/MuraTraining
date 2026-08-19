@@ -348,9 +348,9 @@ function setRowHTML(exId, s, i, editable) {
   return `
     <div class="set-row" data-setid="${s.id}" data-exid="${exId}">
       <span class="set-idx">${i + 1}ª</span>
-      <span style="display:flex;align-items:center;gap:3px;color:var(--plate);flex-shrink:0;">
+      <span style="display:flex;flex-direction:column;align-items:center;gap:1px;color:var(--plate);flex-shrink:0;">
         <span class="box meta"><input data-field="repsGoal" value="${attr(goal)}" placeholder="meta" ${editable ? "" : "readonly"} /></span>
-        <span class="unit">meta</span>
+        <span class="unit" style="font-size:9px;line-height:1;">meta</span>
       </span>
       <span style="display:flex;align-items:center;gap:3px;color:var(--chalk);flex-shrink:0;">
         <span class="box"><input data-field="repsDone" value="${attr(s.repsDone)}" placeholder="0" /></span>
