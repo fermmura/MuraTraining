@@ -552,3 +552,56 @@ function escapeHTML(str) {
   return String(str || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 function attr(str) { return escapeHTML(str).replace(/\n/g, "&#10;"); }
+
+// ---------- banner "instalar app" ----------
+
+function isStandalone() {
+  return window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+}
+function isIOS() {
+  return /iphone|ipad|ipod/i.test(navigator.userAgent);
+}
+
+let deferredInstallPrompt = null;
+
+window.addEventListener("beforeinstallprompt", (e) => {
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  showInstallBanner("android");
+});
+
+function showInstallBanner(kind) {
+  if (isStandalone()) return; // já instalado, não precisa avisar
+  if (localStorage.getItem("install-banner-dismissed") === "1") return;
+
+  const el = document.getElementById("install-banner");
+  el.classList.remove("hidden");
+
+  if (kind === "android") {
+    el.innerHTML = `<span>Instale este app no seu celular pra acesso rápido, direto da tela inicial.</span>
+      <button id="ib-install">Instalar</button>
+      <button id="ib-dismiss">✕</button>`;
+    el.querySelector("#ib-install").onclick = async () => {
+      el.classList.add("hidden");
+      if (deferredInstallPrompt) {
+        deferredInstallPrompt.prompt();
+        await deferredInstallPrompt.userChoice;
+        deferredInstallPrompt = null;
+      }
+    };
+  } else {
+    el.innerHTML = `<span>Toque em <b>Compartilhar</b> (⬆️) e depois em <b>"Adicionar à Tela de Início"</b> pra instalar o app.</span>
+      <button id="ib-dismiss">✕</button>`;
+  }
+
+  el.querySelector("#ib-dismiss").onclick = () => {
+    el.classList.add("hidden");
+    localStorage.setItem("install-banner-dismissed", "1");
+  };
+}
+
+window.addEventListener("load", () => {
+  if (isIOS() && !isStandalone()) {
+    setTimeout(() => showInstallBanner("ios"), 1500);
+  }
+});
