@@ -421,6 +421,10 @@ function wireClientArea(client, editable) {
   // exercícios
   document.querySelectorAll("[data-rmex]").forEach((btn) => {
     btn.onclick = () => {
+      const exName = btn.closest(".ex-card")?.querySelector(".ex-name")?.value
+        || btn.closest(".ex-card")?.querySelector(".ex-name")?.textContent
+        || "este exercício";
+      if (!confirm(`Excluir "${exName}"? Essa ação não pode ser desfeita.`)) return;
       const days = (client.days || []).map((d) =>
         d.id === ui.activeDayId ? { ...d, exercises: (d.exercises || []).filter((ex) => ex.id !== btn.dataset.rmex) } : d
       );
