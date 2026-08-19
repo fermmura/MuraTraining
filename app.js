@@ -349,15 +349,15 @@ function setRowHTML(exId, s, i, editable) {
     <div class="set-row" data-setid="${s.id}" data-exid="${exId}">
       <span class="set-idx">${i + 1}ª</span>
       <span class="stack" style="color:var(--plate);">
-        <span class="box meta"><input data-field="repsGoal" value="${attr(goal)}" placeholder="meta" ${editable ? "" : "readonly"} /></span>
+        <span class="box meta grow"><input data-field="repsGoal" data-grow="1" value="${attr(goal)}" placeholder="meta" ${editable ? "" : "readonly"} /></span>
         <span class="unit">meta</span>
       </span>
-      <span class="stack" style="color:var(--chalk);">
-        <span class="box"><input data-field="repsDone" value="${attr(s.repsDone)}" placeholder="0" /></span>
+      <span class="stack" style="color:var(--chalk);position:relative;">
+        <button type="button" class="box feito-btn" data-donepick="${exId}|${s.id}">${escapeHTML(s.repsDone || "–")}</button>
         <span class="unit">feito</span>
       </span>
       <span class="stack" style="color:var(--steel);">
-        <span class="box kg"><input data-field="load" value="${attr(s.load)}" /></span>
+        <span class="box kg grow"><input data-field="load" data-grow="1" value="${attr(s.load)}" /></span>
         <span class="unit">kg</span>
       </span>
       ${editable ? `<button class="rm-x" data-rmset="1">✕</button>` : ""}
@@ -489,6 +489,21 @@ function wireClientArea(client, editable) {
       };
     });
 
+    // meta e kg crescem conforme o personal digita
+    row.querySelectorAll("[data-grow]").forEach((input) => {
+      growBox(input);
+      input.oninput = () => growBox(input);
+    });
+
+    // "feito" abre um seletor rápido de números (1 a 15) em vez de digitar
+    const doneBtn = row.querySelector("[data-donepick]");
+    if (doneBtn) {
+      doneBtn.onclick = (e) => {
+        e.stopPropagation();
+        openRepsPicker(doneBtn, exId, setId, client);
+      };
+    }
+
     if (editable) {
       const rmSetBtn = row.querySelector("[data-rmset]");
       if (rmSetBtn) rmSetBtn.onclick = () => {
@@ -517,6 +532,61 @@ function wireClientArea(client, editable) {
 
   // fora das set-rows, tudo trava se não editável (nome do exercício, notas, título do dia etc. já
   // são renderizados como texto/readonly quando editable=false — ver funções acima)
+}
+
+// ---------- crescimento automático dos quadrados meta/kg ----------
+
+function growBox(input) {
+  const box = input.closest(".box");
+  if (!box) return;
+  const len = (input.value || "").length;
+  box.style.width = Math.max(30, len * 11 + 22) + "px";
+}
+
+// ---------- seletor rápido de números (1 a 15) pro campo "feito" ----------
+
+function closeRepsPicker() {
+  document.querySelectorAll(".reps-picker").forEach((p) => p.remove());
+}
+
+function openRepsPicker(btn, exId, setId, client) {
+  const already = btn.parentElement.querySelector(".reps-picker");
+  closeRepsPicker();
+  if (already) return; // clicar de novo no mesmo botão só fecha
+
+  const popup = document.createElement("div");
+  popup.className = "reps-picker";
+  popup.innerHTML = Array.from({ length: 15 }, (_, i) => i + 1)
+    .map((n) => `<button type="button" data-pick="${n}">${n}</button>`)
+    .join("");
+  btn.parentElement.appendChild(popup);
+
+  popup.querySelectorAll("[data-pick]").forEach((numBtn) => {
+    numBtn.onclick = (e) => {
+      e.stopPropagation();
+      const value = numBtn.dataset.pick;
+      const days = (client.days || []).map((d) => {
+        if (d.id !== ui.activeDayId) return d;
+        return {
+          ...d,
+          exercises: (d.exercises || []).map((ex) => {
+            if (ex.id !== exId) return ex;
+            return { ...ex, sets: (ex.sets || []).map((s) => (s.id === setId ? { ...s, repsDone: value } : s)) };
+          }),
+        };
+      });
+      updateDays(client, days);
+    };
+  });
+
+  setTimeout(() => {
+    document.addEventListener("click", function onDocClick(ev) {
+      if (!popup.contains(ev.target) && ev.target !== btn) {
+        popup.remove();
+        document.removeEventListener("click", onDocClick);
+      }
+    });
+  }, 0);
 }
 
 // ---------- utilitários ----------
