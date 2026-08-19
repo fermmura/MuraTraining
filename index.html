@@ -80,6 +80,9 @@
   .ex-name { flex: 1; font-size: 16px; font-weight: 600; }
   .ex-toggle { color: var(--muted); font-size: 22px; flex-shrink: 0; transition: transform .15s ease; padding: 4px 8px; }
   .ex-toggle.collapsed { transform: rotate(-90deg); }
+  .move-btns { display: flex; flex-direction: column; gap: 2px; flex-shrink: 0; }
+  .move-btn { color: var(--muted); font-size: 11px; line-height: 1; padding: 2px 5px; border: 1px solid var(--line); border-radius: 4px; }
+  .move-btn:disabled { opacity: .25; }
   .ex-body.hidden { display: none; }
   .notes-box { background: var(--panelAlt); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
   .notes-box label { font-size: 12px; font-weight: 700; color: var(--muted); letter-spacing: .05em; display: block; margin-bottom: 5px; }
@@ -126,6 +129,22 @@
   #feito-picker .fp-item.selected { color: var(--red); font-weight: 700; font-size: 26px; }
   #feito-picker .fp-cancel { margin-top: 14px; color: var(--muted); font-size: 14px; padding: 6px 12px; }
 
+  /* modal de importar treino (colar texto) */
+  #import-modal.hidden { display: none; }
+  #import-modal { position: fixed; inset: 0; z-index: 70; }
+  #import-modal .im-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.65); }
+  #import-modal .im-card { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
+    background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px;
+    width: 92vw; max-width: 520px; max-height: 85vh; display: flex; flex-direction: column; gap: 10px;
+    box-shadow: 0 12px 32px rgba(0,0,0,.5); }
+  #import-modal .im-title { font-size: 17px; font-weight: 700; }
+  #import-modal .im-hint { font-size: 12px; color: var(--muted); line-height: 1.5; margin: 0; }
+  #import-modal textarea#im-text { flex: 1; min-height: 220px; background: var(--bg); border: 1px solid var(--line);
+    border-radius: 10px; padding: 10px; font-size: 13px; color: var(--chalk); resize: vertical; font-family: monospace; line-height: 1.4; }
+  #import-modal .im-actions { display: flex; justify-content: flex-end; gap: 10px; }
+  #import-modal .im-btn-secondary { color: var(--muted); padding: 9px 16px; font-size: 14px; }
+  #import-modal .im-btn-primary { background: var(--red); color: #fff; border-radius: 8px; padding: 9px 18px; font-size: 14px; font-weight: 600; }
+
   @media (max-width: 700px) {
     .layout { flex-direction: column; }
     .sidebar { width: 100%; border-radius: 12px 12px 0 0; border-right: none; border-bottom: 1px solid var(--line); }
@@ -139,6 +158,19 @@
   </div>
   <div id="install-banner" class="hidden"></div>
   <div id="feito-picker" class="hidden"></div>
+  <div id="import-modal" class="hidden">
+    <div class="im-backdrop" id="im-backdrop"></div>
+    <div class="im-card">
+      <div class="im-title">Importar treino (colar texto)</div>
+      <p class="im-hint">Cole o texto do treino no formato de dias da semana, nomes de exercício e linhas com "1x10-12r 20kg". Isso <b>adiciona</b> novos treinos sem apagar os que já existem.</p>
+      <textarea id="im-text" placeholder="Segunda-feira (...)&#10;Nome do exercício&#10;-8r 10kg&#10;1x9-12r 26kg&#10;..."></textarea>
+      <div id="im-error" class="error" style="font-size:12px;"></div>
+      <div class="im-actions">
+        <button id="im-cancel" class="im-btn-secondary">Cancelar</button>
+        <button id="im-confirm" class="im-btn-primary">Importar</button>
+      </div>
+    </div>
+  </div>
 
   <!-- Firebase (SDK compat, sem precisar de bundler) -->
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>

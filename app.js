@@ -280,6 +280,7 @@ function clientAreaHTML(client, editable) {
 
   if (!day) {
     return `
+      ${editable ? `<button class="dashed-btn" id="open-import-modal" style="margin-bottom:12px;">📋 Importar treino (colar texto)</button>` : ""}
       <div class="grid">
         ${(client.days || [])
           .map(
@@ -309,13 +310,13 @@ function clientAreaHTML(client, editable) {
       ${editable ? `<button class="rm-x" id="rm-day">🗑</button>` : ""}
     </div>
     <div id="exercises-wrap">
-      ${(day.exercises || []).map((ex) => exerciseHTML(ex, editable)).join("")}
+      ${(day.exercises || []).map((ex, i, arr) => exerciseHTML(ex, editable, i, arr.length)).join("")}
     </div>
     ${editable ? `<button class="dashed-btn" id="add-exercise">+ adicionar exercício</button>` : ""}
   `;
 }
 
-function exerciseHTML(ex, editable) {
+function exerciseHTML(ex, editable, index, total) {
   const collapsed = isCollapsed(ex.id);
   return `
     <div class="ex-card" data-exid="${ex.id}">
@@ -324,6 +325,14 @@ function exerciseHTML(ex, editable) {
           editable
             ? `<input class="ex-name" data-field="name" placeholder="Exercício" value="${attr(ex.name)}" />`
             : `<div class="ex-name">${escapeHTML(ex.name || "Exercício")}</div>`
+        }
+        ${
+          editable
+            ? `<span class="move-btns">
+                <button class="move-btn" data-move="up" data-exmove="${ex.id}" ${index === 0 ? "disabled" : ""}>▲</button>
+                <button class="move-btn" data-move="down" data-exmove="${ex.id}" ${index === total - 1 ? "disabled" : ""}>▼</button>
+              </span>`
+            : ""
         }
         ${editable ? `<button class="rm-x" data-rmex="${ex.id}">✕</button>` : ""}
         <button class="ex-toggle ${collapsed ? "collapsed" : ""}" data-toggle="${ex.id}" aria-label="Abrir/fechar exercício">▾</button>
@@ -353,7 +362,11 @@ function setRowHTML(exId, s, i, editable) {
         <span class="unit">meta</span>
       </span>
       <span class="stack" style="color:var(--chalk);position:relative;">
-        <button type="button" class="box feito-open" data-feitoopen="1">${escapeHTML(s.repsDone || "–")}</button>
+        ${
+          editable
+            ? `<span class="box"><input data-field="repsDone" data-grow="1" value="${attr(s.repsDone)}" placeholder="0" /></span>`
+            : `<button type="button" class="box feito-open" data-feitoopen="1">${escapeHTML(s.repsDone || "–")}</button>`
+        }
         <span class="unit">feito</span>
       </span>
       <span class="stack" style="color:var(--steel);">
@@ -368,6 +381,8 @@ function setRowHTML(exId, s, i, editable) {
 
 function wireClientArea(client, editable) {
   if (!client) return;
+
+  if (editable) wireImportModal(client);
 
   // grade
   document.querySelectorAll("[data-open]").forEach((sq) => {
@@ -434,6 +449,23 @@ function wireClientArea(client, editable) {
       const exId = btn.dataset.toggle;
       collapsedEx[exId] = !isCollapsed(exId);
       render();
+    };
+  });
+
+  document.querySelectorAll("[data-exmove]").forEach((btn) => {
+    btn.onclick = () => {
+      const exId = btn.dataset.exmove;
+      const dir = btn.dataset.move; // "up" ou "down"
+      const days = (client.days || []).map((d) => {
+        if (d.id !== ui.activeDayId) return d;
+        const list = [...(d.exercises || [])];
+        const idx = list.findIndex((ex) => ex.id === exId);
+        const swapWith = dir === "up" ? idx - 1 : idx + 1;
+        if (idx < 0 || swapWith < 0 || swapWith >= list.length) return d;
+        [list[idx], list[swapWith]] = [list[swapWith], list[idx]];
+        return { ...d, exercises: list };
+      });
+      updateDays(client, days);
     };
   });
 
@@ -529,6 +561,142 @@ function wireClientArea(client, editable) {
 
   // fora das set-rows, tudo trava se não editável (nome do exercício, notas, título do dia etc. já
   // são renderizados como texto/readonly quando editable=false — ver funções acima)
+}
+
+// ---------- importar treino colando texto ----------
+
+const WEEKDAY_RE = /^\*?\s*(segunda|ter[cç]a|quarta|quinta|sexta|s[aá]bado|domingo)[\s-]*(feira)?[^*]*\*?$/i;
+
+function stripStars(line) {
+  return line.replace(/^\*+/, "").replace(/\*+$/, "").trim();
+}
+
+function parseWorkLine(line) {
+  const m = line.match(/^(\d+)\s*x\s*(\d+(?:-\d+)?)\s*r\b(.*)$/i);
+  if (!m) return null;
+  const count = parseInt(m[1], 10) || 1;
+  const range = m[2];
+  let rest = m[3] || "";
+  let load = "";
+  const kgMatch = rest.match(/([\d]+(?:[.,]\d+)?)\s*kg/i);
+  if (kgMatch) {
+    load = kgMatch[1];
+  } else if (/peso do corpo|corpo/i.test(rest)) {
+    load = "corpo";
+  }
+  let done = "";
+  if (kgMatch) {
+    const afterKg = rest.slice(rest.indexOf(kgMatch[0]) + kgMatch[0].length);
+    const doneMatch = afterKg.match(/(\d+)\s*r\b/i);
+    if (doneMatch) done = doneMatch[1];
+  }
+  return { count, range, load, done };
+}
+
+function parseWorkoutText(text) {
+  const lines = text.split("\n").map((l) => l.trim());
+  const days = [];
+  let currentDay = null;
+  let currentExercise = null;
+  let started = false; // ignora linhas antes do 1º cabeçalho de dia (ex.: título da ficha)
+
+  const ensureExercise = () => {
+    if (!currentExercise) {
+      currentExercise = { id: uid(), name: "Aquecimento / Mobilidade", notes: "", sets: [], _notesArr: [] };
+      currentDay.exercises.push(currentExercise);
+    }
+  };
+
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+
+    const stripped = stripStars(line);
+    if (WEEKDAY_RE.test(stripped) || WEEKDAY_RE.test(line)) {
+      currentDay = { id: uid(), title: stripped, exercises: [] };
+      days.push(currentDay);
+      currentExercise = null;
+      started = true;
+      continue;
+    }
+    if (!started) continue;
+
+    if (line.startsWith("-")) {
+      ensureExercise();
+      currentExercise._notesArr.push(line.slice(1).trim());
+      continue;
+    }
+
+    const work = parseWorkLine(line);
+    if (work) {
+      ensureExercise();
+      for (let n = 0; n < work.count; n++) {
+        currentExercise.sets.push({ id: uid(), repsGoal: work.range, repsDone: work.done, load: work.load, intensity: 0 });
+      }
+      continue;
+    }
+
+    if (line.startsWith("*") || (line.startsWith("(") && line.endsWith(")"))) {
+      ensureExercise();
+      currentExercise._notesArr.push(stripStars(line).replace(/^\(|\)$/g, ""));
+      continue;
+    }
+
+    // qualquer outra linha = nome de um novo exercício
+    currentExercise = { id: uid(), name: line.replace(/:$/, ""), notes: "", sets: [], _notesArr: [] };
+    currentDay.exercises.push(currentExercise);
+  }
+
+  for (const day of days) {
+    for (const ex of day.exercises) {
+      ex.notes = ex._notesArr.join("; ");
+      delete ex._notesArr;
+    }
+  }
+  return days;
+}
+
+function openImportModal() {
+  document.getElementById("import-modal").classList.remove("hidden");
+  document.getElementById("im-text").value = "";
+  document.getElementById("im-error").textContent = "";
+}
+function closeImportModal() {
+  document.getElementById("import-modal").classList.add("hidden");
+}
+
+function wireImportModal(client) {
+  const openBtn = document.getElementById("open-import-modal");
+  if (openBtn) openBtn.onclick = openImportModal;
+
+  const cancelBtn = document.getElementById("im-cancel");
+  const backdrop = document.getElementById("im-backdrop");
+  if (cancelBtn) cancelBtn.onclick = closeImportModal;
+  if (backdrop) backdrop.onclick = closeImportModal;
+
+  const confirmBtn = document.getElementById("im-confirm");
+  if (confirmBtn) {
+    confirmBtn.onclick = () => {
+      const text = document.getElementById("im-text").value;
+      const errorEl = document.getElementById("im-error");
+      if (!text.trim()) {
+        errorEl.textContent = "Cole o texto do treino antes de importar.";
+        return;
+      }
+      const parsedDays = parseWorkoutText(text);
+      if (parsedDays.length === 0) {
+        errorEl.textContent = "Não encontrei nenhum dia da semana nesse texto (ex.: \"Segunda-feira\"). Confira o formato.";
+        return;
+      }
+      const totalEx = parsedDays.reduce((sum, d) => sum + d.exercises.length, 0);
+      if (!confirm(`Encontrei ${parsedDays.length} dia(s) de treino e ${totalEx} exercícios. Isso vai ADICIONAR esses treinos aos que o aluno já tem (sem apagar nada existente). Continuar?`)) {
+        return;
+      }
+      const nextDays = [...(client.days || []), ...parsedDays];
+      updateDays(client, nextDays);
+      closeImportModal();
+    };
+  }
 }
 
 // ---------- bloco de rolagem (estilo roleta) pro campo "feito" ----------
