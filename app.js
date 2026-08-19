@@ -353,12 +353,7 @@ function setRowHTML(exId, s, i, editable) {
         <span class="unit">meta</span>
       </span>
       <span class="stack" style="color:var(--chalk);position:relative;">
-        <select class="box feito-select" data-field="repsDone">
-          <option value="" ${!s.repsDone ? "selected" : ""}>–</option>
-          ${Array.from({ length: 15 }, (_, n) => n + 1)
-            .map((n) => `<option value="${n}" ${String(s.repsDone) === String(n) ? "selected" : ""}>${n}</option>`)
-            .join("")}
-        </select>
+        <button type="button" class="box feito-open" data-feitoopen="1">${escapeHTML(s.repsDone || "–")}</button>
         <span class="unit">feito</span>
       </span>
       <span class="stack" style="color:var(--steel);">
@@ -500,8 +495,11 @@ function wireClientArea(client, editable) {
       input.oninput = () => growBox(input);
     });
 
-    // "feito" agora é um <select> nativo — o salvamento já é tratado
-    // pelo loop genérico de [data-field] logo acima.
+    // "feito" abre um bloco próprio de rolagem (estilo roleta) pra escolher 1 a 15
+    const feitoBtn = row.querySelector("[data-feitoopen]");
+    if (feitoBtn) {
+      feitoBtn.onclick = () => openFeitoPicker(client, exId, setId, feitoBtn.textContent.trim());
+    }
 
     if (editable) {
       const rmSetBtn = row.querySelector("[data-rmset]");
@@ -531,6 +529,60 @@ function wireClientArea(client, editable) {
 
   // fora das set-rows, tudo trava se não editável (nome do exercício, notas, título do dia etc. já
   // são renderizados como texto/readonly quando editable=false — ver funções acima)
+}
+
+// ---------- bloco de rolagem (estilo roleta) pro campo "feito" ----------
+
+const FEITO_ITEM_H = 44;
+
+function closeFeitoPicker() {
+  const el = document.getElementById("feito-picker");
+  if (el) el.classList.add("hidden");
+}
+
+function openFeitoPicker(client, exId, setId, currentVal) {
+  const el = document.getElementById("feito-picker");
+  const nums = Array.from({ length: 15 }, (_, i) => i + 1);
+
+  el.innerHTML = `
+    <div class="fp-backdrop" id="fp-backdrop"></div>
+    <div class="fp-card">
+      <div class="fp-title">Quantas repetições você fez?</div>
+      <div class="fp-scroll" id="fp-scroll">
+        <div class="fp-pad"></div>
+        ${nums
+          .map((n) => `<div class="fp-item ${String(n) === String(currentVal) ? "selected" : ""}" data-num="${n}">${n}</div>`)
+          .join("")}
+        <div class="fp-pad"></div>
+      </div>
+      <button type="button" class="fp-cancel" id="fp-cancel">Cancelar</button>
+    </div>`;
+  el.classList.remove("hidden");
+
+  const scrollEl = document.getElementById("fp-scroll");
+  const idx = Math.max(0, nums.indexOf(Number(currentVal)));
+  scrollEl.scrollTop = idx * FEITO_ITEM_H;
+
+  el.querySelectorAll("[data-num]").forEach((item) => {
+    item.onclick = () => {
+      const value = item.dataset.num;
+      const days = (client.days || []).map((d) => {
+        if (d.id !== ui.activeDayId) return d;
+        return {
+          ...d,
+          exercises: (d.exercises || []).map((ex) => {
+            if (ex.id !== exId) return ex;
+            return { ...ex, sets: (ex.sets || []).map((s) => (s.id === setId ? { ...s, repsDone: value } : s)) };
+          }),
+        };
+      });
+      updateDays(client, days);
+      closeFeitoPicker();
+    };
+  });
+
+  document.getElementById("fp-backdrop").onclick = closeFeitoPicker;
+  document.getElementById("fp-cancel").onclick = closeFeitoPicker;
 }
 
 // ---------- crescimento automático dos quadrados meta/kg ----------
