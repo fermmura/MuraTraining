@@ -111,7 +111,7 @@ function saveClient(id, patch) {
   db.collection("clients").doc(id).update(patch).catch((e) => alert("Erro ao salvar: " + e.message));
 }
 
-function emptySet() { return { id: uid(), repsGoal: "10", repsDone: "", load: "", intensity: 0, type: "normal", rir: "" }; }
+function emptySet() { return { id: uid(), repsGoal: "10", repsDone: "", load: "", intensity: 0, rir: "", rirEnabled: false }; }
 function emptyExercise() { return { id: uid(), name: "", notes: "", sets: [emptySet()] }; }
 function emptyDay(title) { return { id: uid(), title, exercises: [] }; }
 
@@ -361,25 +361,12 @@ function exerciseHTML(ex, editable, index, total) {
     </div>`;
 }
 
-const SET_TYPE_LABEL = { normal: "Normal", cluster: "Cluster", backoff: "Backoff", restpause: "Rest-pause" };
-
 function setRowHTML(exId, s, i, editable) {
   const goal = s.repsGoal ?? s.reps ?? ""; // compatível com fichas antigas (campo único "reps")
-  const type = s.type || "normal";
+  const rirOn = !!s.rirEnabled;
   return `
     <div class="set-row" data-setid="${s.id}" data-exid="${exId}">
       <span class="set-idx">${i + 1}ª</span>
-      ${
-        editable
-          ? `<select class="type-select" data-field="type">
-              ${Object.keys(SET_TYPE_LABEL)
-                .map((k) => `<option value="${k}" ${type === k ? "selected" : ""}>${SET_TYPE_LABEL[k]}</option>`)
-                .join("")}
-            </select>`
-          : type !== "normal"
-          ? `<span class="type-badge type-${type}">${SET_TYPE_LABEL[type]}</span>`
-          : ""
-      }
       <span class="stack" style="color:var(--plate);">
         <span class="box meta grow"><input data-field="repsGoal" data-grow="1" value="${attr(goal)}" placeholder="meta" ${editable ? "" : "readonly"} /></span>
         <span class="unit">meta</span>
@@ -396,16 +383,22 @@ function setRowHTML(exId, s, i, editable) {
         <span class="box kg grow"><input data-field="load" data-grow="1" value="${attr(s.load)}" /></span>
         <span class="unit">kg</span>
       </span>
-      <span class="stack" style="color:var(--plate);">
-        ${
-          editable
-            ? `<span class="box rir grow"><input data-field="rir" data-grow="1" value="${attr(s.rir)}" placeholder="-" /></span>`
-            : s.rir
-            ? `<span class="box rir" style="display:flex;align-items:center;justify-content:center;">${escapeHTML(s.rir)}</span>`
-            : ""
-        }
-        <span class="unit">rir</span>
-      </span>
+      ${
+        editable
+          ? `<span class="stack" style="color:var(--plate);">
+              <span class="box rir grow"><input data-field="rir" data-grow="1" value="${attr(s.rir)}" placeholder="-" /></span>
+              <span class="unit" style="display:flex;align-items:center;gap:2px;">
+                rir
+                <button type="button" class="rir-toggle ${rirOn ? "on" : ""}" data-rirtoggle="1" title="${rirOn ? "Aluno pode editar" : "Só você edita"}">${rirOn ? "🔓" : "🔒"}</button>
+              </span>
+            </span>`
+          : rirOn
+          ? `<span class="stack" style="color:var(--plate);">
+              <span class="box rir"><input data-field="rir" value="${attr(s.rir)}" placeholder="-" /></span>
+              <span class="unit">rir</span>
+            </span>`
+          : ""
+      }
       ${editable ? `<button class="rm-x" data-rmset="1">✕</button>` : ""}
     </div>`;
 }
@@ -569,6 +562,26 @@ function wireClientArea(client, editable) {
     }
 
     if (editable) {
+      const rirToggleBtn = row.querySelector("[data-rirtoggle]");
+      if (rirToggleBtn) {
+        rirToggleBtn.onclick = () => {
+          const days = (client.days || []).map((d) => {
+            if (d.id !== ui.activeDayId) return d;
+            return {
+              ...d,
+              exercises: (d.exercises || []).map((ex) => {
+                if (ex.id !== exId) return ex;
+                return {
+                  ...ex,
+                  sets: (ex.sets || []).map((s) => (s.id === setId ? { ...s, rirEnabled: !s.rirEnabled } : s)),
+                };
+              }),
+            };
+          });
+          updateDays(client, days);
+        };
+      }
+
       const rmSetBtn = row.querySelector("[data-rmset]");
       if (rmSetBtn) rmSetBtn.onclick = () => {
         const days = (client.days || []).map((d) => {
@@ -677,12 +690,7 @@ function stripStars(line) {
 // depois do "Nx" e do range de reps
 function extractRest(count, range, rest) {
   let load = "";
-  let type = "normal";
   let rir = "";
-
-  if (/cluster/i.test(rest)) type = "cluster";
-  if (/rest[\s-]?pause|restp/i.test(rest)) type = "restpause";
-  if (/back-?off/i.test(rest)) type = "backoff";
 
   const rirMatch = rest.match(/(\d+)\s*rir\b/i);
   if (rirMatch) rir = rirMatch[1];
@@ -700,15 +708,16 @@ function extractRest(count, range, rest) {
     load = "corpo";
   }
 
-  // o que sobrar (não virou range/kg/rir/tipo) vira observação, pra não perder informação
+  // o que sobrar (não virou range/kg/rir) vira observação, pra não perder informação
+  // (ex.: "cluster 4x4r", "restp", "sem strap" continuam visíveis no texto)
   let leftover = rest;
   [rirMatch, placaMatch, kgMatch].forEach((m) => {
     if (m) leftover = leftover.replace(m[0], "");
   });
-  leftover = leftover.replace(/cluster|rest[\s-]?pause|restp|back-?off|zerada|sem peso|peso do corpo|\bkg\b/gi, "");
+  leftover = leftover.replace(/zerada|sem peso|peso do corpo|\bkg\b/gi, "");
   leftover = leftover.replace(/^[\s.,;:-]+|[\s.,;:-]+$/g, "").trim();
 
-  return { count, range, load, done: "", type, rir, extraNote: leftover };
+  return { count, range, load, done: "", rir, extraNote: leftover };
 }
 
 function parseWorkLine(line) {
@@ -788,8 +797,8 @@ function parseWorkoutText(text) {
           repsDone: work.done,
           load: work.load,
           intensity: 0,
-          type: work.type,
           rir: work.rir,
+          rirEnabled: false,
         });
       }
       if (work.extraNote) {
