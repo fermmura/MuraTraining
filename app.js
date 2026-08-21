@@ -111,7 +111,7 @@ function saveClient(id, patch) {
   db.collection("clients").doc(id).update(patch).catch((e) => alert("Erro ao salvar: " + e.message));
 }
 
-function emptySet() { return { id: uid(), repsGoal: "10", repsDone: "", load: "", intensity: 0 }; }
+function emptySet() { return { id: uid(), repsGoal: "10", repsDone: "", load: "", intensity: 0, type: "normal", rir: "" }; }
 function emptyExercise() { return { id: uid(), name: "", notes: "", sets: [emptySet()] }; }
 function emptyDay(title) { return { id: uid(), title, exercises: [] }; }
 
@@ -361,11 +361,25 @@ function exerciseHTML(ex, editable, index, total) {
     </div>`;
 }
 
+const SET_TYPE_LABEL = { normal: "Normal", cluster: "Cluster", backoff: "Backoff", restpause: "Rest-pause" };
+
 function setRowHTML(exId, s, i, editable) {
   const goal = s.repsGoal ?? s.reps ?? ""; // compatível com fichas antigas (campo único "reps")
+  const type = s.type || "normal";
   return `
     <div class="set-row" data-setid="${s.id}" data-exid="${exId}">
       <span class="set-idx">${i + 1}ª</span>
+      ${
+        editable
+          ? `<select class="type-select" data-field="type">
+              ${Object.keys(SET_TYPE_LABEL)
+                .map((k) => `<option value="${k}" ${type === k ? "selected" : ""}>${SET_TYPE_LABEL[k]}</option>`)
+                .join("")}
+            </select>`
+          : type !== "normal"
+          ? `<span class="type-badge type-${type}">${SET_TYPE_LABEL[type]}</span>`
+          : ""
+      }
       <span class="stack" style="color:var(--plate);">
         <span class="box meta grow"><input data-field="repsGoal" data-grow="1" value="${attr(goal)}" placeholder="meta" ${editable ? "" : "readonly"} /></span>
         <span class="unit">meta</span>
@@ -381,6 +395,16 @@ function setRowHTML(exId, s, i, editable) {
       <span class="stack" style="color:var(--steel);">
         <span class="box kg grow"><input data-field="load" data-grow="1" value="${attr(s.load)}" /></span>
         <span class="unit">kg</span>
+      </span>
+      <span class="stack" style="color:var(--plate);">
+        ${
+          editable
+            ? `<span class="box rir grow"><input data-field="rir" data-grow="1" value="${attr(s.rir)}" placeholder="-" /></span>`
+            : s.rir
+            ? `<span class="box rir" style="display:flex;align-items:center;justify-content:center;">${escapeHTML(s.rir)}</span>`
+            : ""
+        }
+        <span class="unit">rir</span>
       </span>
       ${editable ? `<button class="rm-x" data-rmset="1">✕</button>` : ""}
     </div>`;
@@ -643,32 +667,81 @@ function saveSetField(client, dayId, exId, setId, field, value) {
 
 
 
-const WEEKDAY_RE = /^\*?\s*(segunda|ter[cç]a|quarta|quinta|sexta|s[aá]bado|domingo)[\s-]*(feira)?[^*]*\*?$/i;
+const WEEKDAY_RE = /\b(segunda|ter[cç]a|quarta|quinta|sexta|s[aá]bado|domingo)\b/i;
 
 function stripStars(line) {
   return line.replace(/^\*+/, "").replace(/\*+$/, "").trim();
 }
 
-function parseWorkLine(line) {
-  const m = line.match(/^(\d+)\s*x\s*(\d+(?:-\d+)?)\s*r\b(.*)$/i);
-  if (!m) return null;
-  const count = parseInt(m[1], 10) || 1;
-  const range = m[2];
-  let rest = m[3] || "";
+// extrai tipo de série / RIR / carga / observações do texto que sobrou
+// depois do "Nx" e do range de reps
+function extractRest(count, range, rest) {
   let load = "";
+  let type = "normal";
+  let rir = "";
+
+  if (/cluster/i.test(rest)) type = "cluster";
+  if (/rest[\s-]?pause|restp/i.test(rest)) type = "restpause";
+  if (/back-?off/i.test(rest)) type = "backoff";
+
+  const rirMatch = rest.match(/(\d+)\s*rir\b/i);
+  if (rirMatch) rir = rirMatch[1];
+
+  const placaMatch = rest.match(/placa\s*(\d+)/i);
   const kgMatch = rest.match(/([\d]+(?:[.,]\d+)?)\s*kg/i);
-  if (kgMatch) {
+
+  if (placaMatch) {
+    load = `Placa ${placaMatch[1]}`;
+  } else if (/zerada|sem peso/i.test(rest)) {
+    load = "0";
+  } else if (kgMatch) {
     load = kgMatch[1];
-  } else if (/peso do corpo|corpo/i.test(rest)) {
+  } else if (/peso do corpo|\bcorpo\b/i.test(rest)) {
     load = "corpo";
   }
-  let done = "";
-  if (kgMatch) {
-    const afterKg = rest.slice(rest.indexOf(kgMatch[0]) + kgMatch[0].length);
-    const doneMatch = afterKg.match(/(\d+)\s*r\b/i);
-    if (doneMatch) done = doneMatch[1];
+
+  // o que sobrar (não virou range/kg/rir/tipo) vira observação, pra não perder informação
+  let leftover = rest;
+  [rirMatch, placaMatch, kgMatch].forEach((m) => {
+    if (m) leftover = leftover.replace(m[0], "");
+  });
+  leftover = leftover.replace(/cluster|rest[\s-]?pause|restp|back-?off|zerada|sem peso|peso do corpo|\bkg\b/gi, "");
+  leftover = leftover.replace(/^[\s.,;:-]+|[\s.,;:-]+$/g, "").trim();
+
+  return { count, range, load, done: "", type, rir, extraNote: leftover };
+}
+
+function parseWorkLine(line) {
+  // formato limpo: "NxRANGEr resto"
+  const clean = line.match(/^(\d+)\s*x\s*(\d+)(?:[-\s]+(\d+))?\s*r\b(.*)$/i);
+  if (clean) {
+    const count = parseInt(clean[1], 10) || 1;
+    const range = clean[3] ? `${clean[2]}-${clean[3]}` : clean[2];
+    return extractRest(count, range, clean[4] || "");
   }
-  return { count, range, load, done };
+
+  // formato solto: "Nx resto qualquer" (placa, cluster, etc. sem range logo depois do x)
+  const loose = line.match(/^(\d+)\s*x\s*(.*)$/i);
+  if (loose) {
+    const count = parseInt(loose[1], 10) || 1;
+    const rest = loose[2] || "";
+    const restForRange = rest.replace(/placa\s*\d+/i, ""); // evita o nº da placa virar "reps" por engano
+    const rangeMatch = restForRange.match(/(\d+)(?:[-\s]+(\d+))?\s*r\b/i);
+    const range = rangeMatch ? (rangeMatch[2] ? `${rangeMatch[1]}-${rangeMatch[2]}` : rangeMatch[1]) : "";
+    return extractRest(count, range, rest);
+  }
+
+  return null;
+}
+
+function isPrepLine(line) {
+  // linhas de aquecimento sem "-" na frente, tipo "12r 0kg" ou "5 8r 40kg"
+  return /^\d+(?:[-\s]+\d+)?\s*r\b/i.test(line) && !/^\d+\s*x/i.test(line);
+}
+
+function looksLikeInstruction(line) {
+  // linhas de instrução geral (não são nem exercício nem série), tipo "Descanso no máximo 1m30"
+  return /^(descanso|obs|observa[cç][aã]o|dica)\b/i.test(line);
 }
 
 function parseWorkoutText(text) {
@@ -690,7 +763,7 @@ function parseWorkoutText(text) {
     if (!line) continue;
 
     const stripped = stripStars(line);
-    if (WEEKDAY_RE.test(stripped) || WEEKDAY_RE.test(line)) {
+    if (WEEKDAY_RE.test(line)) {
       currentDay = { id: uid(), title: stripped, exercises: [] };
       days.push(currentDay);
       currentExercise = null;
@@ -709,14 +782,37 @@ function parseWorkoutText(text) {
     if (work) {
       ensureExercise();
       for (let n = 0; n < work.count; n++) {
-        currentExercise.sets.push({ id: uid(), repsGoal: work.range, repsDone: work.done, load: work.load, intensity: 0 });
+        currentExercise.sets.push({
+          id: uid(),
+          repsGoal: work.range,
+          repsDone: work.done,
+          load: work.load,
+          intensity: 0,
+          type: work.type,
+          rir: work.rir,
+        });
       }
+      if (work.extraNote) {
+        currentExercise._notesArr.push(`(série ${currentExercise.sets.length}) ${work.extraNote}`);
+      }
+      continue;
+    }
+
+    if (isPrepLine(line)) {
+      ensureExercise();
+      currentExercise._notesArr.push(line);
       continue;
     }
 
     if (line.startsWith("*") || (line.startsWith("(") && line.endsWith(")"))) {
       ensureExercise();
       currentExercise._notesArr.push(stripStars(line).replace(/^\(|\)$/g, ""));
+      continue;
+    }
+
+    if (looksLikeInstruction(line)) {
+      ensureExercise();
+      currentExercise._notesArr.push(line);
       continue;
     }
 
