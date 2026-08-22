@@ -349,7 +349,7 @@ function exerciseHTML(ex, editable, index, total) {
       <div class="ex-body ${collapsed ? "hidden" : ""}">
         <div class="notes-box">
           <label>ANOTAÇÕES</label>
-          <textarea rows="3" data-field="notes" placeholder="ex.: preparatória com 2 séries leves de 15 reps; trabalho com cadência 2-0-2, descanso 90s"
+          <textarea rows="3" data-field="notes" data-autogrow="1" placeholder="ex.: preparatória com 2 séries leves de 15 reps; trabalho com cadência 2-0-2, descanso 90s"
             ${editable ? "" : "readonly"}>${escapeHTML(ex.notes || "")}</textarea>
         </div>
         <div>
@@ -523,6 +523,11 @@ function wireClientArea(client, editable) {
         });
         updateDays(client, days);
       };
+    });
+
+    card.querySelectorAll("[data-autogrow]").forEach((el) => {
+      growTextarea(el);
+      el.oninput = () => growTextarea(el);
     });
 
     const addSetBtn = card.querySelector(`[data-addset="${exId}"]`);
@@ -1111,6 +1116,11 @@ function growBox(input) {
   if (!box) return;
   const len = (input.value || "").length;
   box.style.width = Math.max(30, len * 11 + 22) + "px";
+}
+
+function growTextarea(el) {
+  el.style.height = "auto";
+  el.style.height = el.scrollHeight + "px";
 }
 
 
