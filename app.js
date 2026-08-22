@@ -415,7 +415,6 @@ function setRowHTML(exId, s, i, editable) {
   return `
     <div class="set-row" data-setid="${s.id}" data-exid="${exId}">
       <span class="set-idx">${i + 1}ª</span>
-      ${editable ? `<button class="rm-x" data-rmset="1"><i class="ti ti-x"></i></button>` : ""}
       <span class="stack" style="color:var(--plate);">
         <span class="box meta grow"><input data-field="repsGoal" data-grow="1" value="${attr(goal)}" placeholder="meta" ${editable ? "" : "readonly"} /></span>
         <span class="unit">meta</span>
@@ -448,6 +447,7 @@ function setRowHTML(exId, s, i, editable) {
             </span>`
           : ""
       }
+      ${editable ? `<button class="rm-x" data-rmset="1"><i class="ti ti-x"></i></button>` : ""}
     </div>`;
 }
 
