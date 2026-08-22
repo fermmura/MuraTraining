@@ -488,6 +488,9 @@ function wireClientArea(client, editable) {
   document.querySelectorAll("[data-rmday]").forEach((btn) => {
     btn.onclick = (e) => {
       e.stopPropagation();
+      const day = (client.days || []).find((d) => d.id === btn.dataset.rmday);
+      const name = day ? day.title || "este treino" : "este treino";
+      if (!confirm(`Excluir "${name}"? Todos os exercícios dele serão apagados. Essa ação não pode ser desfeita.`)) return;
       updateDays(client, (client.days || []).filter((d) => d.id !== btn.dataset.rmday));
     };
   });
@@ -550,6 +553,9 @@ function wireClientArea(client, editable) {
 
   const rmDayBtn = el("rm-day");
   if (rmDayBtn) rmDayBtn.onclick = () => {
+    const current = (client.days || []).find((d) => d.id === ui.activeDayId);
+    const name = current ? current.title || "este treino" : "este treino";
+    if (!confirm(`Excluir "${name}"? Todos os exercícios dele serão apagados. Essa ação não pode ser desfeita.`)) return;
     const days = (client.days || []).filter((d) => d.id !== ui.activeDayId);
     ui.activeDayId = null;
     updateDays(client, days);
@@ -683,6 +689,7 @@ function wireClientArea(client, editable) {
 
       const rmSetBtn = row.querySelector("[data-rmset]");
       if (rmSetBtn) rmSetBtn.onclick = () => {
+        if (!confirm("Excluir essa série?")) return;
         const days = (client.days || []).map((d) => {
           if (d.id !== ui.activeDayId) return d;
           return {
