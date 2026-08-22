@@ -23,7 +23,7 @@ let clients = []; // só preenchido para o treinador
 let myClient = null; // só preenchido para o aluno
 let unsubscribe = null;
 
-let ui = { view: "loading", selectedId: null, activeDayId: null, progOpen: false, progMode: "table", progKey: null };
+let ui = { view: "loading", selectedId: null, activeDayId: null, progOpen: false, progMode: "table", progKey: null, studentEnteredTreinos: false };
 let collapsedEx = {}; // exercícios minimizados; por padrão, todo exercício começa minimizado
 const isCollapsed = (exId) => collapsedEx[exId] !== false;
 
@@ -68,6 +68,7 @@ function doLogin(email, password) {
 }
 
 function doLogout() {
+  ui.studentEnteredTreinos = false;
   auth.signOut();
 }
 
@@ -129,7 +130,12 @@ function render() {
   if (ui.view === "student") {
     appEl.innerHTML = studentHTML();
     el("btn-logout").onclick = doLogout;
-    wireClientArea(myClient, false);
+    if (myClient && !ui.studentEnteredTreinos) {
+      const enterBtn = el("enter-treinos");
+      if (enterBtn) enterBtn.onclick = () => { ui.studentEnteredTreinos = true; render(); };
+    } else {
+      wireClientArea(myClient, false);
+    }
     return;
   }
 }
@@ -262,6 +268,18 @@ function wireTrainer() {
 // ---------------- ALUNO ----------------
 
 function studentHTML() {
+  if (myClient && !ui.studentEnteredTreinos) {
+    return `
+      ${topbarHTML(myClient.name, "modo aluno")}
+      <div class="main solo" style="display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:340px; gap:6px; text-align:center;">
+        <i class="ti ti-barbell" style="color:var(--red); font-size:34px;"></i>
+        <div class="display" style="font-size:22px; margin-top:6px;">Olá, ${escapeHTML(myClient.name.split(" ")[0])}</div>
+        <div class="muted-note" style="margin-bottom:22px;">Bora treinar hoje?</div>
+        <button id="enter-treinos" class="cta" style="width:220px; display:flex; align-items:center; justify-content:center; gap:8px;">
+          <i class="ti ti-list-check"></i> Treinos
+        </button>
+      </div>`;
+  }
   return `
     ${topbarHTML(myClient ? myClient.name : "Meu treino", "modo aluno")}
     <div class="main solo">
@@ -296,19 +314,27 @@ function clientAreaHTML(client, editable) {
       ${
         editable
           ? `<div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
-               <button class="dashed-btn" id="open-import-modal">📋 Importar treino (colar texto)</button>
-               <button class="dashed-btn" id="open-progression">📈 Progressão</button>
+               <button class="dashed-btn" id="open-import-modal"><i class="ti ti-clipboard-text"></i> Importar treino (colar texto)</button>
+               <button class="dashed-btn" id="open-progression"><i class="ti ti-chart-line"></i> Progressão</button>
              </div>`
           : ""
       }
       <div class="grid ${editable ? "" : "stacked"}">
         ${(client.days || [])
-          .map((d) => {
+          .map((d, dayIdx, dayArr) => {
             const vol = dayVolume(d);
             return `
           <div class="sq" data-open="${d.id}">
-            ${editable ? `<button class="rm" data-rmday="${d.id}">✕</button>` : ""}
-            <div style="color:var(--red);">🏋</div>
+            ${
+              editable
+                ? `<span class="day-move-btns">
+                    <button class="move-btn" data-daymove="up" data-dayid="${d.id}" ${dayIdx === 0 ? "disabled" : ""}><i class="ti ti-chevron-up"></i></button>
+                    <button class="move-btn" data-daymove="down" data-dayid="${d.id}" ${dayIdx === dayArr.length - 1 ? "disabled" : ""}><i class="ti ti-chevron-down"></i></button>
+                  </span>`
+                : ""
+            }
+            ${editable ? `<button class="rm" data-rmday="${d.id}"><i class="ti ti-x"></i></button>` : ""}
+            <div style="color:var(--red);"><i class="ti ti-barbell" style="font-size:18px;"></i></div>
             <div>
               <div class="title display">${escapeHTML(d.title || "Sem título")}</div>
               <div class="count">${(d.exercises || []).length} exercício${(d.exercises || []).length !== 1 ? "s" : ""}</div>
@@ -323,13 +349,13 @@ function clientAreaHTML(client, editable) {
 
   return `
     <div class="day-head">
-      <button class="back" id="back-to-grid">‹ Semana</button>
+      <button class="back" id="back-to-grid"><i class="ti ti-chevron-left"></i> Semana</button>
       ${
         editable
           ? `<input class="display day-title" id="day-title-input" value="${attr(day.title)}" />`
           : `<div class="display day-title">${escapeHTML(day.title)}</div>`
       }
-      ${editable ? `<button class="rm-x" id="rm-day">🗑</button>` : ""}
+      ${editable ? `<button class="rm-x" id="rm-day"><i class="ti ti-trash"></i></button>` : ""}
     </div>
     ${
       (() => {
@@ -358,12 +384,12 @@ function exerciseHTML(ex, editable, index, total) {
         ${
           editable
             ? `<span class="move-btns">
-                <button class="move-btn" data-move="up" data-exmove="${ex.id}" ${index === 0 ? "disabled" : ""}>▲</button>
-                <button class="move-btn" data-move="down" data-exmove="${ex.id}" ${index === total - 1 ? "disabled" : ""}>▼</button>
+                <button class="move-btn" data-move="up" data-exmove="${ex.id}" ${index === 0 ? "disabled" : ""}><i class="ti ti-chevron-up"></i></button>
+                <button class="move-btn" data-move="down" data-exmove="${ex.id}" ${index === total - 1 ? "disabled" : ""}><i class="ti ti-chevron-down"></i></button>
               </span>`
             : ""
         }
-        ${editable ? `<button class="rm-x" data-rmex="${ex.id}">✕</button>` : ""}
+        ${editable ? `<button class="rm-x" data-rmex="${ex.id}"><i class="ti ti-x"></i></button>` : ""}
         <button class="ex-toggle ${collapsed ? "collapsed" : ""}" data-toggle="${ex.id}" aria-label="Abrir/fechar exercício">▾</button>
       </div>
       <div class="ex-body ${collapsed ? "hidden" : ""}">
@@ -409,7 +435,7 @@ function setRowHTML(exId, s, i, editable) {
               <span class="box rir grow"><input data-field="rir" data-grow="1" value="${attr(s.rir)}" placeholder="-" /></span>
               <span class="unit" style="display:flex;align-items:center;gap:2px;">
                 rir
-                <button type="button" class="rir-toggle ${rirOn ? "on" : ""}" data-rirtoggle="1" title="${rirOn ? "Aluno pode editar" : "Só você edita"}">${rirOn ? "🔓" : "🔒"}</button>
+                <button type="button" class="rir-toggle ${rirOn ? "on" : ""}" data-rirtoggle="1" title="${rirOn ? "Aluno pode editar" : "Só você edita"}"><i class="ti ${rirOn ? "ti-lock-open" : "ti-lock"}"></i></button>
               </span>
             </span>`
           : rirOn
@@ -419,7 +445,7 @@ function setRowHTML(exId, s, i, editable) {
             </span>`
           : ""
       }
-      ${editable ? `<button class="rm-x" data-rmset="1">✕</button>` : ""}
+      ${editable ? `<button class="rm-x" data-rmset="1"><i class="ti ti-x"></i></button>` : ""}
     </div>`;
 }
 
@@ -446,7 +472,7 @@ function wireClientArea(client, editable) {
   // grade
   document.querySelectorAll("[data-open]").forEach((sq) => {
     sq.onclick = (e) => {
-      if (e.target.closest("[data-rmday]")) return;
+      if (e.target.closest("[data-rmday]") || e.target.closest("[data-daymove]")) return;
       ui.activeDayId = sq.dataset.open;
       render();
     };
@@ -461,6 +487,19 @@ function wireClientArea(client, editable) {
     btn.onclick = (e) => {
       e.stopPropagation();
       updateDays(client, (client.days || []).filter((d) => d.id !== btn.dataset.rmday));
+    };
+  });
+  document.querySelectorAll("[data-daymove]").forEach((btn) => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const dayId = btn.dataset.dayid;
+      const dir = btn.dataset.daymove;
+      const list = [...(client.days || [])];
+      const idx = list.findIndex((d) => d.id === dayId);
+      const swapWith = dir === "up" ? idx - 1 : idx + 1;
+      if (idx < 0 || swapWith < 0 || swapWith >= list.length) return;
+      [list[idx], list[swapWith]] = [list[swapWith], list[idx]];
+      updateDays(client, list);
     };
   });
 
@@ -988,7 +1027,7 @@ function progressionHTML(client) {
   const weeks = allWeekKeys(client).slice(-8);
   return `
     <div class="day-head">
-      <button class="back" id="prog-back">‹ Aluno</button>
+      <button class="back" id="prog-back"><i class="ti ti-chevron-left"></i> Aluno</button>
       <div class="display day-title">Progressão</div>
     </div>
     <div style="display:flex; gap:8px; margin-bottom:14px;">
@@ -1026,8 +1065,8 @@ function progTableHTML(rows, weeks) {
                   const num = parseFloat(String(raw).replace(",", "."));
                   let arrow = "";
                   if (prevVal != null && !isNaN(num)) {
-                    if (num > prevVal) arrow = ` <span style="color:#639922;">▲</span>`;
-                    else if (num < prevVal) arrow = ` <span style="color:#E24B4A;">▼</span>`;
+                    if (num > prevVal) arrow = ` <span style="color:#639922;"><i class="ti ti-arrow-up"></i></span>`;
+                    else if (num < prevVal) arrow = ` <span style="color:#E24B4A;"><i class="ti ti-arrow-down"></i></span>`;
                   }
                   if (!isNaN(num)) prevVal = num;
                   const label = `${e.repsDone || e.repsGoal || "-"}r${e.load ? " · " + e.load + "kg" : ""}`;
@@ -1178,7 +1217,7 @@ function showInstallBanner(kind) {
   if (kind === "android") {
     el.innerHTML = `<span>Instale este app no seu celular pra acesso rápido, direto da tela inicial.</span>
       <button id="ib-install">Instalar</button>
-      <button id="ib-dismiss">✕</button>`;
+      <button id="ib-dismiss"><i class="ti ti-x"></i></button>`;
     el.querySelector("#ib-install").onclick = async () => {
       el.classList.add("hidden");
       if (deferredInstallPrompt) {
@@ -1189,7 +1228,7 @@ function showInstallBanner(kind) {
     };
   } else {
     el.innerHTML = `<span>Toque em <b>Compartilhar</b> (⬆️) e depois em <b>"Adicionar à Tela de Início"</b> pra instalar o app.</span>
-      <button id="ib-dismiss">✕</button>`;
+      <button id="ib-dismiss"><i class="ti ti-x"></i></button>`;
   }
 
   el.querySelector("#ib-dismiss").onclick = () => {

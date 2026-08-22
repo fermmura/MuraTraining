@@ -15,6 +15,8 @@
 
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;500;600;700&display=swap');
+  @import url('https://cdnjs.cloudflare.com/ajax/libs/tabler-icons/2.44.0/iconfont/tabler-icons.min.css');
+  .ti { font-size: inherit; vertical-align: -2px; }
   :root {
     --bg: #17161A; --panel: #211F25; --panelAlt: #2A2830; --line: #3A3742;
     --chalk: #F3EFE6; --muted: #9A94A6; --red: #FF4433; --redDim: #5C2620;
@@ -66,6 +68,7 @@
   .sq { aspect-ratio: 1/1; background: var(--panelAlt); border: 1px solid var(--line); border-radius: 12px;
     padding: 12px; display: flex; flex-direction: column; justify-content: space-between; cursor: pointer; position: relative; }
   .sq .rm { position: absolute; top: 8px; right: 8px; color: var(--muted); }
+  .day-move-btns { position: absolute; top: 8px; left: 8px; display: flex; flex-direction: column; gap: 2px; }
   .sq .title { font-size: 16px; }
   .sq .count { font-size: 11px; color: var(--muted); margin-top: 2px; }
   .sq.add { align-items: center; justify-content: center; border-style: dashed; color: var(--muted); }
