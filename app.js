@@ -24,6 +24,7 @@ let myClient = null; // só preenchido para o aluno
 let unsubscribe = null;
 
 let ui = { view: "loading", selectedId: null, activeDayId: null, progOpen: false, progMode: "table", progKey: null, studentEnteredTreinos: false };
+let draggedDayId = null;
 let collapsedEx = {}; // exercícios minimizados; por padrão, todo exercício começa minimizado
 const isCollapsed = (exId) => collapsedEx[exId] !== false;
 
@@ -324,7 +325,7 @@ function clientAreaHTML(client, editable) {
           .map((d, dayIdx, dayArr) => {
             const vol = dayVolume(d);
             return `
-          <div class="sq" data-open="${d.id}">
+          <div class="sq" data-open="${d.id}" ${editable ? 'draggable="true"' : ""}>
             ${
               editable
                 ? `<div class="sq-toolbar">
@@ -503,6 +504,39 @@ function wireClientArea(client, editable) {
       updateDays(client, list);
     };
   });
+
+  if (editable) {
+    document.querySelectorAll("[data-open]").forEach((sq) => {
+      sq.addEventListener("dragstart", (e) => {
+        draggedDayId = sq.dataset.open;
+        sq.classList.add("dragging");
+        e.dataTransfer.effectAllowed = "move";
+      });
+      sq.addEventListener("dragend", () => {
+        sq.classList.remove("dragging");
+        document.querySelectorAll(".sq.drag-over").forEach((el2) => el2.classList.remove("drag-over"));
+      });
+      sq.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        if (sq.dataset.open !== draggedDayId) sq.classList.add("drag-over");
+      });
+      sq.addEventListener("dragleave", () => sq.classList.remove("drag-over"));
+      sq.addEventListener("drop", (e) => {
+        e.preventDefault();
+        sq.classList.remove("drag-over");
+        const targetId = sq.dataset.open;
+        if (!draggedDayId || draggedDayId === targetId) return;
+        const list = [...(client.days || [])];
+        const fromIdx = list.findIndex((d) => d.id === draggedDayId);
+        const toIdx = list.findIndex((d) => d.id === targetId);
+        if (fromIdx < 0 || toIdx < 0) return;
+        const [moved] = list.splice(fromIdx, 1);
+        list.splice(toIdx, 0, moved);
+        draggedDayId = null;
+        updateDays(client, list);
+      });
+    });
+  }
 
   // detalhe do dia
   const backBtn = el("back-to-grid");
