@@ -66,9 +66,9 @@
   /* grade de treinos */
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px,1fr)); gap: 12px; }
   .sq { aspect-ratio: 1/1; background: var(--panelAlt); border: 1px solid var(--line); border-radius: 12px;
-    padding: 12px; display: flex; flex-direction: column; justify-content: space-between; cursor: pointer; position: relative; }
-  .sq .rm { position: absolute; top: 8px; right: 8px; color: var(--muted); }
-  .day-move-btns { position: absolute; top: 8px; left: 8px; display: flex; flex-direction: column; gap: 2px; }
+    padding: 10px 12px 12px; display: flex; flex-direction: column; justify-content: space-between; cursor: pointer; position: relative; }
+  .sq-toolbar { display: flex; align-items: center; gap: 4px; margin-bottom: 2px; }
+  .sq-toolbar .move-btn { font-size: 12px; padding: 3px 6px; }
   .sq .title { font-size: 16px; }
   .sq .count { font-size: 11px; color: var(--muted); margin-top: 2px; }
   .sq.add { align-items: center; justify-content: center; border-style: dashed; color: var(--muted); }

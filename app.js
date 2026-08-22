@@ -327,13 +327,14 @@ function clientAreaHTML(client, editable) {
           <div class="sq" data-open="${d.id}">
             ${
               editable
-                ? `<span class="day-move-btns">
+                ? `<div class="sq-toolbar">
                     <button class="move-btn" data-daymove="up" data-dayid="${d.id}" ${dayIdx === 0 ? "disabled" : ""}><i class="ti ti-chevron-up"></i></button>
                     <button class="move-btn" data-daymove="down" data-dayid="${d.id}" ${dayIdx === dayArr.length - 1 ? "disabled" : ""}><i class="ti ti-chevron-down"></i></button>
-                  </span>`
+                    <span style="flex:1;"></span>
+                    <button class="move-btn" data-rmday="${d.id}"><i class="ti ti-trash"></i></button>
+                  </div>`
                 : ""
             }
-            ${editable ? `<button class="rm" data-rmday="${d.id}"><i class="ti ti-x"></i></button>` : ""}
             <div style="color:var(--red);"><i class="ti ti-barbell" style="font-size:18px;"></i></div>
             <div>
               <div class="title display">${escapeHTML(d.title || "Sem título")}</div>
@@ -413,6 +414,7 @@ function setRowHTML(exId, s, i, editable) {
   return `
     <div class="set-row" data-setid="${s.id}" data-exid="${exId}">
       <span class="set-idx">${i + 1}ª</span>
+      ${editable ? `<button class="rm-x" data-rmset="1"><i class="ti ti-x"></i></button>` : ""}
       <span class="stack" style="color:var(--plate);">
         <span class="box meta grow"><input data-field="repsGoal" data-grow="1" value="${attr(goal)}" placeholder="meta" ${editable ? "" : "readonly"} /></span>
         <span class="unit">meta</span>
@@ -445,7 +447,6 @@ function setRowHTML(exId, s, i, editable) {
             </span>`
           : ""
       }
-      ${editable ? `<button class="rm-x" data-rmset="1"><i class="ti ti-x"></i></button>` : ""}
     </div>`;
 }
 
