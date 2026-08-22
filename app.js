@@ -275,6 +275,17 @@ function studentHTML() {
 
 // ---------------- ÁREA DE TREINOS (compartilhada treinador/aluno) ----------------
 
+function dayVolume(day) {
+  let total = 0, done = 0;
+  for (const ex of day.exercises || []) {
+    for (const s of ex.sets || []) {
+      total++;
+      if (s.repsDone) done++;
+    }
+  }
+  return { done, total };
+}
+
 function clientAreaHTML(client, editable) {
   if (editable && ui.progOpen) return progressionHTML(client);
 
@@ -292,17 +303,19 @@ function clientAreaHTML(client, editable) {
       }
       <div class="grid ${editable ? "" : "stacked"}">
         ${(client.days || [])
-          .map(
-            (d) => `
+          .map((d) => {
+            const vol = dayVolume(d);
+            return `
           <div class="sq" data-open="${d.id}">
             ${editable ? `<button class="rm" data-rmday="${d.id}">✕</button>` : ""}
             <div style="color:var(--red);">🏋</div>
             <div>
               <div class="title display">${escapeHTML(d.title || "Sem título")}</div>
               <div class="count">${(d.exercises || []).length} exercício${(d.exercises || []).length !== 1 ? "s" : ""}</div>
+              ${vol.total > 0 ? `<div class="count" style="color:${vol.done === vol.total ? "#639922" : "var(--muted)"};">${vol.done}/${vol.total} séries feitas</div>` : ""}
             </div>
-          </div>`
-          )
+          </div>`;
+          })
           .join("")}
         ${editable ? `<div class="sq add" id="add-day-sq">+ novo treino</div>` : ""}
       </div>`;
@@ -318,6 +331,13 @@ function clientAreaHTML(client, editable) {
       }
       ${editable ? `<button class="rm-x" id="rm-day">🗑</button>` : ""}
     </div>
+    ${
+      (() => {
+        const vol = dayVolume(day);
+        if (vol.total === 0) return "";
+        return `<div class="muted-note" style="margin:-10px 0 14px; color:${vol.done === vol.total ? "#639922" : "var(--muted)"};">${vol.done}/${vol.total} séries feitas</div>`;
+      })()
+    }
     <div id="exercises-wrap">
       ${(day.exercises || []).map((ex, i, arr) => exerciseHTML(ex, editable, i, arr.length)).join("")}
     </div>
