@@ -305,6 +305,46 @@ function dayVolume(day) {
   return { done, total };
 }
 
+const MUSCLE_GROUPS = [
+  "Peito", "Costas", "Ombro", "Trapézio", "Bíceps", "Tríceps", "Antebraço",
+  "Quadríceps", "Posterior de coxa", "Glúteo", "Adutores", "Panturrilha", "Abdômen", "Lombar",
+];
+
+// tenta adivinhar o grupo muscular pelo nome do exercício (o treinador pode corrigir depois)
+function guessMuscle(name) {
+  const n = (name || "").toLowerCase();
+  const test = (...words) => words.some((w) => n.includes(w));
+  if (test("supino", "peck deck", "peckdeck", "crucifixo", "cross over", "crossover", "voador")) return "Peito";
+  if (test("puxada", "remada", "pulldown", "barra fixa", "pull-up", "pulley costas", "levantamento terra", "terra convencional")) return "Costas";
+  if (test("desenvolvimento", "elevação lateral", "elevacao lateral", "elevação frontal", "arnold")) return "Ombro";
+  if (test("encolhimento", "trapézio", "trapezio")) return "Trapézio";
+  if (test("rosca") && !test("rosca inversa punho")) return "Bíceps";
+  if (test("tríceps", "triceps", "jm press", "francês", "frances", "testa")) return "Tríceps";
+  if (test("punho", "antebraço", "antebraco")) return "Antebraço";
+  if (test("panturrilha", "flexão plantar", "flexao plantar")) return "Panturrilha";
+  if (test("agachamento", "leg press", "cadeira extensora", "hack", "avanço", "avanco", "afundo")) return "Quadríceps";
+  if (test("stiff", "cadeira flexora", "mesa flexora", "flexão de joelho", "flexao de joelho", "flexão nórdica", "flexao nordica")) return "Posterior de coxa";
+  if (test("glúteo", "gluteo", "hip thrust", "elevação pélvica", "elevacao pelvica", "coice")) return "Glúteo";
+  if (test("adutora", "adutor")) return "Adutores";
+  if (test("abdominal", "abs supra", "abs infra", "prancha", "abdômen", "abdomen")) return "Abdômen";
+  if (test("lombar", "extensão de tronco", "extensao de tronco", "hiperextensão", "hiperextensao")) return "Lombar";
+  return "";
+}
+
+function muscleVolume(day) {
+  const byMuscle = {};
+  for (const ex of day.exercises || []) {
+    const muscle = ex.muscle || "";
+    if (!muscle) continue;
+    if (!byMuscle[muscle]) byMuscle[muscle] = { done: 0, total: 0 };
+    for (const s of ex.sets || []) {
+      byMuscle[muscle].total++;
+      if (s.repsDone) byMuscle[muscle].done++;
+    }
+  }
+  return Object.entries(byMuscle).sort((a, b) => b[1].total - a[1].total);
+}
+
 function clientAreaHTML(client, editable) {
   if (editable && ui.progOpen) return progressionHTML(client);
 
@@ -363,7 +403,20 @@ function clientAreaHTML(client, editable) {
       (() => {
         const vol = dayVolume(day);
         if (vol.total === 0) return "";
-        return `<div class="muted-note" style="margin:-10px 0 14px; color:${vol.done === vol.total ? "#639922" : "var(--muted)"};">${vol.done}/${vol.total} séries feitas</div>`;
+        const byMuscle = muscleVolume(day);
+        const totalLine = `<div class="muted-note" style="margin:-10px 0 8px; color:${vol.done === vol.total ? "#639922" : "var(--muted)"};">${vol.done}/${vol.total} séries feitas</div>`;
+        const muscleLine =
+          byMuscle.length > 0
+            ? `<div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:14px;">
+                ${byMuscle
+                  .map(
+                    ([m, v]) =>
+                      `<span class="muscle-vol-pill">${escapeHTML(m)}: <b>${v.done}/${v.total}</b></span>`
+                  )
+                  .join("")}
+              </div>`
+            : "";
+        return totalLine + muscleLine;
       })()
     }
     <div id="exercises-wrap">
@@ -394,6 +447,16 @@ function exerciseHTML(ex, editable, index, total) {
         ${editable ? `<button class="rm-x" data-rmex="${ex.id}"><i class="ti ti-x"></i></button>` : ""}
         <button class="ex-toggle ${collapsed ? "collapsed" : ""}" data-toggle="${ex.id}" aria-label="Abrir/fechar exercício">▾</button>
       </div>
+      ${
+        editable
+          ? `<select class="muscle-select" data-field="muscle">
+              <option value="">Grupo muscular…</option>
+              ${MUSCLE_GROUPS.map((m) => `<option value="${m}" ${ex.muscle === m ? "selected" : ""}>${m}</option>`).join("")}
+            </select>`
+          : ex.muscle
+          ? `<span class="muscle-tag">${escapeHTML(ex.muscle)}</span>`
+          : ""
+      }
       <div class="ex-body ${collapsed ? "hidden" : ""}">
         <div class="notes-box">
           <label>ANOTAÇÕES</label>
@@ -932,7 +995,8 @@ function parseWorkoutText(text) {
     }
 
     // qualquer outra linha = nome de um novo exercício
-    currentExercise = { id: uid(), name: line.replace(/:$/, ""), notes: "", sets: [], _notesArr: [] };
+    const exName = line.replace(/:$/, "");
+    currentExercise = { id: uid(), name: exName, muscle: guessMuscle(exName), notes: "", sets: [], _notesArr: [] };
     currentDay.exercises.push(currentExercise);
   }
 
