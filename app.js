@@ -108,6 +108,12 @@ async function removeStudentDoc(clientId) {
   await db.collection("clients").doc(clientId).delete();
 }
 
+async function recordClientPassword(clientId, password) {
+  // isso só REGISTRA a senha pra ela aparecer na tela — não altera a senha
+  // de login de verdade (isso precisa ser feito no Console do Firebase)
+  await db.collection("clients").doc(clientId).update({ password });
+}
+
 // ---------- leitura/escrita dos dados de treino ----------
 
 function saveClient(id, patch) {
@@ -215,7 +221,11 @@ function trainerHTML() {
               <span class="ce">${escapeHTML(c.email)}</span>
               ${
                 isSelected
-                  ? `<span class="ce" style="color:var(--plate);">${c.password ? "senha: " + escapeHTML(c.password) : "senha não registrada (criado antes dessa opção)"}</span>`
+                  ? `<div style="display:flex;align-items:center;gap:4px;margin-top:2px;">
+                      <span style="font-size:11px;color:var(--plate);">senha:</span>
+                      <input class="ce pw-input" data-pwinput="${c.id}" value="${attr(c.password || "")}" placeholder="não registrada" style="flex:1;color:var(--plate);" />
+                      <button class="copy-btn" data-pwsave="${c.id}">salvar</button>
+                    </div>`
                   : ""
               }
             </div>`;
@@ -268,6 +278,30 @@ function wireTrainer() {
       navigator.clipboard.writeText(`Email: ${c.email}\n${senhaTexto}`).catch(() => {});
       btn.textContent = "copiado!";
       setTimeout(() => (btn.textContent = "copiar login"), 1200);
+    };
+  });
+
+  document.querySelectorAll("[data-pwinput]").forEach((input) => {
+    input.onclick = (e) => e.stopPropagation();
+    input.onkeydown = (e) => e.stopPropagation();
+  });
+
+  document.querySelectorAll("[data-pwsave]").forEach((btn) => {
+    btn.onclick = async (e) => {
+      e.stopPropagation();
+      const clientId = btn.dataset.pwsave;
+      const input = document.querySelector(`[data-pwinput="${clientId}"]`);
+      const value = input.value.trim();
+      if (!value) return;
+      btn.textContent = "…";
+      try {
+        await recordClientPassword(clientId, value);
+        btn.textContent = "salvo!";
+        setTimeout(() => (btn.textContent = "salvar"), 1200);
+      } catch (err) {
+        btn.textContent = "erro";
+        setTimeout(() => (btn.textContent = "salvar"), 1500);
+      }
     };
   });
 
