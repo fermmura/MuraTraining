@@ -95,6 +95,7 @@ async function createStudent(name, email, password) {
   await db.collection("clients").doc(cred.user.uid).set({
     name,
     email: email.toLowerCase(),
+    password, // guardado só pra você conseguir consultar/copiar depois; só você (e o próprio aluno) enxergam isso
     goal: "",
     days: [],
     createdAt: Date.now(),
@@ -115,6 +116,7 @@ function saveClient(id, patch) {
 
 function emptySet() { return { id: uid(), repsGoal: "10", repsDone: "", load: "", intensity: 0, rir: "", rirEnabled: false }; }
 function emptyExercise() { return { id: uid(), name: "", notes: "", sets: [emptySet()] }; }
+
 function emptyDay(title) { return { id: uid(), title, exercises: [] }; }
 
 function updateDays(client, nextDays) {
@@ -202,16 +204,22 @@ function trainerHTML() {
         <div style="display:flex;flex-direction:column;gap:2px;max-height:420px;overflow:auto;">
           ${clients.length === 0 ? `<p class="muted-note">Nenhum aluno ainda.</p>` : ""}
           ${clients
-            .map(
-              (c) => `
-            <div class="client-row ${c.id === ui.selectedId ? "active" : ""}" data-id="${c.id}">
+            .map((c) => {
+              const isSelected = c.id === ui.selectedId;
+              return `
+            <div class="client-row ${isSelected ? "active" : ""}" data-id="${c.id}">
               <div style="display:flex;align-items:center;gap:6px;">
                 <span class="cn" style="flex:1;">${escapeHTML(c.name)}</span>
                 <button class="copy-btn" data-copy="${c.id}">copiar login</button>
               </div>
               <span class="ce">${escapeHTML(c.email)}</span>
-            </div>`
-            )
+              ${
+                isSelected
+                  ? `<span class="ce" style="color:var(--plate);">${c.password ? "senha: " + escapeHTML(c.password) : "senha não registrada (criado antes dessa opção)"}</span>`
+                  : ""
+              }
+            </div>`;
+            })
             .join("")}
         </div>
       </div>
@@ -256,7 +264,8 @@ function wireTrainer() {
     btn.onclick = (e) => {
       e.stopPropagation();
       const c = clients.find((x) => x.id === btn.dataset.copy);
-      navigator.clipboard.writeText(`Email: ${c.email}\n(a senha é a que você cadastrou ao criar o aluno)`).catch(() => {});
+      const senhaTexto = c.password ? `Senha: ${c.password}` : "(a senha é a que você cadastrou ao criar o aluno)";
+      navigator.clipboard.writeText(`Email: ${c.email}\n${senhaTexto}`).catch(() => {});
       btn.textContent = "copiado!";
       setTimeout(() => (btn.textContent = "copiar login"), 1200);
     };
