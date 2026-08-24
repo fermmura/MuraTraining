@@ -125,6 +125,24 @@ async function removeStudentDoc(clientId) {
   await db.collection("clients").doc(clientId).delete();
 }
 
+// recria o login de um aluno que já existe, com senha nova, sem mandar
+// nenhum email — PRÉ-REQUISITO: você precisa ter apagado a conta antiga
+// dele no Firebase Console (Authentication > Users > excluir) antes de usar isso,
+// senão o Firebase recusa por já existir uma conta com esse email
+async function resetStudentLogin(oldClient, newPassword) {
+  const secondary = firebase.apps.find((a) => a.name === "Secondary") || firebase.initializeApp(firebaseConfig, "Secondary");
+  const secAuth = secondary.auth();
+  const cred = await secAuth.createUserWithEmailAndPassword(oldClient.email, newPassword);
+  await secAuth.signOut();
+
+  const { id, ...rest } = oldClient;
+  await db.collection("clients").doc(cred.user.uid).set({
+    ...rest,
+    password: newPassword,
+  });
+  await db.collection("clients").doc(oldClient.id).delete();
+}
+
 async function recordClientPassword(clientId, password) {
   // isso só REGISTRA a senha pra ela aparecer na tela — não altera a senha
   // de login de verdade (isso precisa ser feito no Console do Firebase)
@@ -242,7 +260,8 @@ function trainerHTML() {
                       <span style="font-size:11px;color:var(--plate);">senha:</span>
                       <input class="ce pw-input" data-pwinput="${c.id}" value="${attr(c.password || "")}" placeholder="não registrada" style="flex:1;color:var(--plate);" />
                       <button class="copy-btn" data-pwsave="${c.id}">salvar</button>
-                    </div>`
+                    </div>
+                    <button class="copy-btn" data-resetlogin="${c.id}" style="margin-top:4px;width:100%;">recriar login com senha nova</button>`
                   : ""
               }
             </div>`;
@@ -318,6 +337,26 @@ function wireTrainer() {
       } catch (err) {
         btn.textContent = "erro";
         setTimeout(() => (btn.textContent = "salvar"), 1500);
+      }
+    };
+  });
+
+  document.querySelectorAll("[data-resetlogin]").forEach((btn) => {
+    btn.onclick = async (e) => {
+      e.stopPropagation();
+      const clientId = btn.dataset.resetlogin;
+      const c = clients.find((x) => x.id === clientId);
+      if (!confirm(`Antes de continuar: você já apagou a conta antiga de "${c.name}" no Firebase Console (Authentication > Users)? Se ainda não apagou, cancele e faça isso primeiro.`)) return;
+      const newPass = prompt(`Nova senha para ${c.name} (mínimo 6 caracteres):`);
+      if (!newPass) return;
+      if (newPass.length < 6) { alert("A senha precisa ter pelo menos 6 caracteres."); return; }
+      btn.textContent = "recriando…";
+      try {
+        await resetStudentLogin(c, newPass);
+        btn.textContent = "pronto!";
+      } catch (err) {
+        alert("Erro: " + traduzErro(err.code));
+        btn.textContent = "recriar login com senha nova";
       }
     };
   });
