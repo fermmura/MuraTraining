@@ -193,6 +193,22 @@
     </div>
   </div>
 
+  <div id="dup-modal" class="hidden">
+    <div class="im-backdrop" id="dup-backdrop"></div>
+    <div class="im-card" style="min-height:auto;">
+      <div class="im-title">Duplicar treinos para um novo aluno</div>
+      <p class="im-hint">Cria um aluno novo já com uma cópia de todos os treinos de <b id="dup-source-name"></b> (as metas ficam iguais; o "feito" começa zerado).</p>
+      <input id="dup-name" placeholder="Nome do novo aluno" style="background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:9px 10px;color:var(--chalk);font-size:14px;" />
+      <input id="dup-email" type="email" placeholder="Email do novo aluno" style="background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:9px 10px;color:var(--chalk);font-size:14px;" />
+      <input id="dup-pass" placeholder="Senha (mín. 6 caracteres)" style="background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:9px 10px;color:var(--chalk);font-size:14px;" />
+      <div id="dup-error" class="error" style="font-size:12px;"></div>
+      <div class="im-actions">
+        <button id="dup-cancel" class="im-btn-secondary">Cancelar</button>
+        <button id="dup-confirm" class="im-btn-primary">Criar e copiar</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Firebase (SDK compat, sem precisar de bundler) -->
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>

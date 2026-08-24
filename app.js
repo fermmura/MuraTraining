@@ -87,20 +87,36 @@ function traduzErro(code) {
 // ---------- treinador: criar aluno (conta + ficha) ----------
 // usa uma instância secundária do Firebase para criar a conta do aluno
 // sem derrubar a sessão do treinador
-async function createStudent(name, email, password) {
+async function createStudent(name, email, password, copyDaysFrom) {
   const secondary = firebase.apps.find((a) => a.name === "Secondary") || firebase.initializeApp(firebaseConfig, "Secondary");
   const secAuth = secondary.auth();
   const cred = await secAuth.createUserWithEmailAndPassword(email.toLowerCase(), password);
   await secAuth.signOut();
+
+  const days = copyDaysFrom ? cloneDaysWithNewIds(copyDaysFrom) : [];
 
   await db.collection("clients").doc(cred.user.uid).set({
     name,
     email: email.toLowerCase(),
     password, // guardado só pra você conseguir consultar/copiar depois; só você (e o próprio aluno) enxergam isso
     goal: "",
-    days: [],
+    days,
     createdAt: Date.now(),
   });
+}
+
+// clona os dias de treino de outro aluno, gerando ids novos pra tudo
+// (dias, exercícios e séries), sem carregar nenhum histórico/progresso junto
+function cloneDaysWithNewIds(days) {
+  return (days || []).map((d) => ({
+    ...d,
+    id: uid(),
+    exercises: (d.exercises || []).map((ex) => ({
+      ...ex,
+      id: uid(),
+      sets: (ex.sets || []).map((s) => ({ ...s, id: uid(), repsDone: "" })),
+    })),
+  }));
 }
 
 async function removeStudentDoc(clientId) {
@@ -401,6 +417,7 @@ function clientAreaHTML(client, editable) {
           ? `<div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
                <button class="dashed-btn" id="open-import-modal"><i class="ti ti-clipboard-text"></i> Importar treino (colar texto)</button>
                <button class="dashed-btn" id="open-progression"><i class="ti ti-chart-line"></i> Progressão</button>
+               <button class="dashed-btn" id="open-duplicate"><i class="ti ti-copy"></i> Duplicar treinos p/ outro aluno</button>
              </div>`
           : ""
       }
@@ -568,7 +585,10 @@ function wireClientArea(client, editable) {
     return;
   }
 
-  if (editable) wireImportModal(client);
+  if (editable) {
+    wireImportModal(client);
+    wireDuplicateModal(client);
+  }
 
   const openProgBtn = document.getElementById("open-progression");
   if (openProgBtn) {
@@ -1092,6 +1112,52 @@ function wireImportModal(client) {
       const nextDays = [...(client.days || []), ...parsedDays];
       updateDays(client, nextDays);
       closeImportModal();
+    };
+  }
+}
+
+function openDuplicateModal(sourceName) {
+  document.getElementById("dup-modal").classList.remove("hidden");
+  document.getElementById("dup-source-name").textContent = sourceName;
+  document.getElementById("dup-name").value = "";
+  document.getElementById("dup-email").value = "";
+  document.getElementById("dup-pass").value = "";
+  document.getElementById("dup-error").textContent = "";
+}
+function closeDuplicateModal() {
+  document.getElementById("dup-modal").classList.add("hidden");
+}
+
+function wireDuplicateModal(client) {
+  const openBtn = document.getElementById("open-duplicate");
+  if (openBtn) openBtn.onclick = () => openDuplicateModal(client.name);
+
+  const cancelBtn = document.getElementById("dup-cancel");
+  const backdrop = document.getElementById("dup-backdrop");
+  if (cancelBtn) cancelBtn.onclick = closeDuplicateModal;
+  if (backdrop) backdrop.onclick = closeDuplicateModal;
+
+  const confirmBtn = document.getElementById("dup-confirm");
+  if (confirmBtn) {
+    confirmBtn.onclick = async () => {
+      const name = document.getElementById("dup-name").value.trim();
+      const email = document.getElementById("dup-email").value.trim();
+      const pass = document.getElementById("dup-pass").value;
+      const errorEl = document.getElementById("dup-error");
+      errorEl.textContent = "";
+      if (!name || !email || pass.length < 6) {
+        errorEl.textContent = "Preencha nome, email e uma senha com 6+ caracteres.";
+        return;
+      }
+      confirmBtn.textContent = "Criando…";
+      try {
+        await createStudent(name, email, pass, client.days || []);
+        closeDuplicateModal();
+      } catch (e) {
+        errorEl.textContent = traduzErro(e.code);
+      } finally {
+        confirmBtn.textContent = "Criar e copiar";
+      }
     };
   }
 }
