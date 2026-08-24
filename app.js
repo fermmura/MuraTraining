@@ -15,27 +15,6 @@ db.enablePersistence({ synchronizeTabs: true }).catch(() => {
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 
-// o Firebase exige um "email" pra login — como o aluno vai digitar só o nome,
-// a gente transforma o nome num email fake por baixo dos panos (ex.: "Pedro Bazzani" -> "pedro.bazzani@meutreino.local")
-function slugName(name) {
-  return (name || "")
-    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, ".")
-    .replace(/^\.+|\.+$/g, "");
-}
-function loginEmailFor(name) {
-  return `${slugName(name)}@meutreino.local`;
-}
-
-// no campo de login, se tiver "@" tratamos como email de verdade (o personal usa email real);
-// se não tiver, é o nome do aluno, e a gente converte pro email fake por baixo dos panos
-function resolveLoginIdentifier(input) {
-  const trimmed = (input || "").trim();
-  if (trimmed.includes("@")) return trimmed.toLowerCase();
-  return loginEmailFor(trimmed);
-}
 const el = (id) => document.getElementById(id);
 const appEl = document.getElementById("app");
 
@@ -108,17 +87,15 @@ function traduzErro(code) {
 // ---------- treinador: criar aluno (conta + ficha) ----------
 // usa uma instância secundária do Firebase para criar a conta do aluno
 // sem derrubar a sessão do treinador
-async function createStudent(name, contactEmail, password) {
-  const loginEmail = loginEmailFor(name);
+async function createStudent(name, email, password) {
   const secondary = firebase.apps.find((a) => a.name === "Secondary") || firebase.initializeApp(firebaseConfig, "Secondary");
   const secAuth = secondary.auth();
-  const cred = await secAuth.createUserWithEmailAndPassword(loginEmail, password);
+  const cred = await secAuth.createUserWithEmailAndPassword(email.toLowerCase(), password);
   await secAuth.signOut();
 
   await db.collection("clients").doc(cred.user.uid).set({
     name,
-    email: loginEmail, // usado pro login (gerado a partir do nome)
-    contactEmail: (contactEmail || "").toLowerCase(), // opcional, só de referência
+    email: email.toLowerCase(),
     password, // guardado só pra você conseguir consultar/copiar depois; só você (e o próprio aluno) enxergam isso
     goal: "",
     days: [],
@@ -136,12 +113,6 @@ async function recordClientPassword(clientId, password) {
   // isso só REGISTRA a senha pra ela aparecer na tela — não altera a senha
   // de login de verdade (isso precisa ser feito no Console do Firebase)
   await db.collection("clients").doc(clientId).update({ password });
-}
-
-async function recordClientLoginEmail(clientId, email) {
-  // atualiza qual email o app usa pra procurar esse aluno — só funciona de
-  // verdade se a conta de login dele no Firebase também usar esse mesmo email
-  await db.collection("clients").doc(clientId).update({ email });
 }
 
 // ---------- leitura/escrita dos dados de treino ----------
@@ -187,8 +158,8 @@ function gateHTML() {
   return `
     <div class="gate">
       <div class="display" style="font-size:26px;">MEU TREINO</div>
-      <p class="muted-note">Aluno: digite seu nome. Personal: digite seu email.</p>
-      <input id="g-email" type="text" placeholder="Seu nome (ou email, se for o personal)" autocomplete="username" />
+      <p class="muted-note">Entre com o email e a senha que seu personal te enviou.</p>
+      <input id="g-email" type="email" placeholder="Email" autocomplete="username" />
       <input id="g-pass" type="password" placeholder="Senha" autocomplete="current-password" />
       ${ui.error ? `<div class="error">${ui.error}</div>` : ""}
       <button class="primary" id="g-submit">ENTRAR</button>
@@ -197,10 +168,10 @@ function gateHTML() {
 
 function wireGate() {
   const submit = () => {
-    const identifier = resolveLoginIdentifier(el("g-email").value);
+    const email = el("g-email").value.trim();
     const pass = el("g-pass").value;
     ui.error = "";
-    doLogin(identifier, pass);
+    doLogin(email, pass);
   };
   el("g-submit").onclick = submit;
   el("g-pass").onkeydown = (e) => { if (e.key === "Enter") submit(); };
@@ -229,9 +200,8 @@ function trainerHTML() {
         <button class="dashed-btn" id="btn-add-client" style="width:100%;justify-content:center;margin-bottom:10px;">+ novo aluno</button>
         <div id="add-client-form" class="hidden" style="display:flex;flex-direction:column;gap:6px;background:var(--panelAlt);padding:8px;border-radius:8px;margin-bottom:10px;">
           <input id="nc-name" placeholder="Nome do aluno" />
-          <input id="nc-email" type="email" placeholder="Email de contato (opcional)" />
+          <input id="nc-email" type="email" placeholder="Email do aluno" />
           <input id="nc-pass" placeholder="Senha (mín. 6 caracteres)" />
-          <p class="muted-note" style="font-size:11px;margin:0;">O aluno vai entrar digitando só o nome (não precisa de email).</p>
           <div style="display:flex;justify-content:flex-end;gap:8px;">
             <button id="nc-cancel" style="color:var(--muted);font-size:12px;">cancelar</button>
             <button id="nc-save" style="color:var(--plate);font-size:12px;">salvar</button>
@@ -243,29 +213,19 @@ function trainerHTML() {
           ${clients
             .map((c) => {
               const isSelected = c.id === ui.selectedId;
-              const expectedEmail = loginEmailFor(c.name);
-              const needsFix = c.email !== expectedEmail;
               return `
             <div class="client-row ${isSelected ? "active" : ""}" data-id="${c.id}">
               <div style="display:flex;align-items:center;gap:6px;">
                 <span class="cn" style="flex:1;">${escapeHTML(c.name)}</span>
                 <button class="copy-btn" data-copy="${c.id}">copiar login</button>
               </div>
-              <span class="ce">login: ${escapeHTML(slugName(c.name))}</span>
+              <span class="ce">${escapeHTML(c.email)}</span>
               ${
                 isSelected
                   ? `<div style="display:flex;align-items:center;gap:4px;margin-top:2px;">
                       <span style="font-size:11px;color:var(--plate);">senha:</span>
                       <input class="ce pw-input" data-pwinput="${c.id}" value="${attr(c.password || "")}" placeholder="não registrada" style="flex:1;color:var(--plate);" />
                       <button class="copy-btn" data-pwsave="${c.id}">salvar</button>
-                    </div>`
-                  : ""
-              }
-              ${
-                isSelected && needsFix
-                  ? `<div style="margin-top:4px;padding:6px;background:var(--redDim);border-radius:6px;font-size:11px;color:var(--chalk);">
-                      Esse aluno ainda usa o formato antigo de login (email real). Pra ele entrar só com o nome, troque o email dele no Firebase Console pra <b>${escapeHTML(expectedEmail)}</b> e depois toque abaixo.
-                      <button data-fixemail="${c.id}" data-newemail="${escapeHTML(expectedEmail)}" style="display:block;margin-top:4px;color:var(--plate);text-decoration:underline;">Já troquei no Firebase — corrigir aqui também</button>
                     </div>`
                   : ""
               }
@@ -286,15 +246,15 @@ function wireTrainer() {
   el("nc-cancel").onclick = () => { el("add-client-form").classList.add("hidden"); };
   el("nc-save").onclick = async () => {
     const name = el("nc-name").value.trim();
-    const contactEmail = el("nc-email").value.trim();
+    const email = el("nc-email").value.trim();
     const pass = el("nc-pass").value;
     el("nc-error").textContent = "";
-    if (!name || pass.length < 6) {
-      el("nc-error").textContent = "Preencha o nome e uma senha com 6+ caracteres.";
+    if (!name || !email || pass.length < 6) {
+      el("nc-error").textContent = "Preencha nome, email e uma senha com 6+ caracteres.";
       return;
     }
     try {
-      await createStudent(name, contactEmail, pass);
+      await createStudent(name, email, pass);
       el("nc-name").value = ""; el("nc-email").value = ""; el("nc-pass").value = "";
       el("add-client-form").classList.add("hidden");
     } catch (e) {
@@ -316,23 +276,9 @@ function wireTrainer() {
       e.stopPropagation();
       const c = clients.find((x) => x.id === btn.dataset.copy);
       const senhaTexto = c.password ? `Senha: ${c.password}` : "(a senha é a que você cadastrou ao criar o aluno)";
-      navigator.clipboard.writeText(`Nome pra entrar: ${c.name}\n${senhaTexto}`).catch(() => {});
+      navigator.clipboard.writeText(`Email: ${c.email}\n${senhaTexto}`).catch(() => {});
       btn.textContent = "copiado!";
       setTimeout(() => (btn.textContent = "copiar login"), 1200);
-    };
-  });
-
-  document.querySelectorAll("[data-fixemail]").forEach((btn) => {
-    btn.onclick = async (e) => {
-      e.stopPropagation();
-      const clientId = btn.dataset.fixemail;
-      const newEmail = btn.dataset.newemail;
-      btn.textContent = "…";
-      try {
-        await recordClientLoginEmail(clientId, newEmail);
-      } catch (err) {
-        btn.textContent = "erro, tente de novo";
-      }
     };
   });
 
