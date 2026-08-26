@@ -24,7 +24,7 @@ let clients = []; // só preenchido para o treinador
 let myClient = null; // só preenchido para o aluno
 let unsubscribe = null;
 
-let ui = { view: "loading", selectedId: null, activeDayId: null, progOpen: false, progMode: "table", progKey: null, studentEnteredTreinos: false };
+let ui = { view: "loading", selectedId: null, activeDayId: null, progOpen: false, progMode: "table", progKey: null, studentEnteredTreinos: false, calendarOpen: false, planWeekKey: null };
 let draggedDayId = null;
 let collapsedEx = {}; // exercícios minimizados; por padrão, todo exercício começa minimizado
 const isCollapsed = (exId) => collapsedEx[exId] !== false;
@@ -161,6 +161,11 @@ function emptyExercise() { return { id: uid(), name: "", notes: "", sets: [empty
 function emptyDay(title) { return { id: uid(), title, exercises: [] }; }
 
 function updateDays(client, nextDays) {
+  if (client.__planId) {
+    const nextPlans = (client.weekPlans || []).map((p) => (p.id === client.__planId ? { ...p, days: nextDays } : p));
+    saveClient(client.id, { weekPlans: nextPlans });
+    return;
+  }
   saveClient(client.id, { days: nextDays });
 }
 
@@ -446,13 +451,18 @@ function muscleVolume(day) {
 
 function clientAreaHTML(client, editable) {
   if (editable && ui.progOpen) return progressionHTML(client);
+  if (ui.calendarOpen) return calendarHTML(client, editable);
+  if (ui.planWeekKey) return planEditHTML(client, editable);
+  return clientAreaHTMLInner(client, editable);
+}
 
+function clientAreaHTMLInner(client, editable) {
   const day = (client.days || []).find((d) => d.id === ui.activeDayId);
 
   if (!day) {
     return `
       ${
-        editable
+        editable && !client.__planId
           ? `<div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
                <button class="dashed-btn" id="open-import-modal"><i class="ti ti-clipboard-text"></i> Importar treino (colar texto)</button>
                <button class="dashed-btn" id="open-progression"><i class="ti ti-chart-line"></i> Progressão</button>
@@ -460,6 +470,7 @@ function clientAreaHTML(client, editable) {
              </div>`
           : ""
       }
+      ${!client.__planId ? `<button class="dashed-btn" id="open-calendar" style="margin-bottom:12px;"><i class="ti ti-calendar-stats"></i> Calendário</button>` : ""}
       <div class="grid ${editable ? "" : "stacked"}">
         ${(client.days || [])
           .map((d, dayIdx, dayArr) => {
@@ -623,8 +634,20 @@ function wireClientArea(client, editable) {
     wireProgression(client);
     return;
   }
+  if (ui.calendarOpen) {
+    wireCalendar(client, editable);
+    return;
+  }
+  if (ui.planWeekKey) {
+    wirePlanEdit(client, editable);
+    return;
+  }
 
-  if (editable) {
+  wireClientAreaInner(client, editable);
+}
+
+function wireClientAreaInner(client, editable) {
+  if (editable && !client.__planId) {
     wireImportModal(client);
     wireDuplicateModal(client);
   }
@@ -633,6 +656,14 @@ function wireClientArea(client, editable) {
   if (openProgBtn) {
     openProgBtn.onclick = () => {
       ui.progOpen = true;
+      render();
+    };
+  }
+
+  const openCalBtn = document.getElementById("open-calendar");
+  if (openCalBtn) {
+    openCalBtn.onclick = () => {
+      ui.calendarOpen = true;
       render();
     };
   }
@@ -946,6 +977,22 @@ function applySetFieldChange(client, dayId, exId, setId, field, value) {
 }
 
 function saveSetField(client, dayId, exId, setId, field, value) {
+  if (client.__planId) {
+    // plano futuro: só atualiza o próprio plano, sem registrar histórico
+    // (nada foi "feito" de verdade ainda)
+    const days = (client.days || []).map((d) => {
+      if (d.id !== dayId) return d;
+      return {
+        ...d,
+        exercises: (d.exercises || []).map((ex) => {
+          if (ex.id !== exId) return ex;
+          return { ...ex, sets: (ex.sets || []).map((s) => (s.id === setId ? { ...s, [field]: value } : s)) };
+        }),
+      };
+    });
+    updateDays(client, days);
+    return;
+  }
   const { days, history } = applySetFieldChange(client, dayId, exId, setId, field, value);
   saveClient(client.id, { days, history });
 }
@@ -1421,6 +1468,180 @@ function wireProgression(client) {
       renderProgChart(client);
     }
   }
+}
+
+// ---------- calendário de semanas ----------
+
+function addWeeks(weekKey, n) {
+  const d = new Date(weekKey + "T00:00:00");
+  d.setDate(d.getDate() + n * 7);
+  return d.toISOString().slice(0, 10);
+}
+
+function weekRangeLabel(weekKey) {
+  const start = new Date(weekKey + "T00:00:00");
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  return `${weekLabel(weekKey)} – ${weekLabel(end.toISOString().slice(0, 10))}`;
+}
+
+// resumo (só leitura) do que foi feito numa semana já passada, a partir do histórico
+function pastWeekSummary(client, weekKey) {
+  const entries = (client.history || []).filter((h) => h.weekKey === weekKey);
+  const byEx = {};
+  for (const h of entries) {
+    if (!byEx[h.exId]) byEx[h.exId] = { name: h.exName, sets: [] };
+    byEx[h.exId].sets.push(h);
+  }
+  return Object.values(byEx);
+}
+
+function calendarHTML(client, editable) {
+  const activeKey = client.activeWeekKey || weekKeyOf(todayKey());
+  const plans = client.weekPlans || [];
+  const offsets = [-2, -1, 0, 1, 2, 3];
+
+  return `
+    <div class="day-head">
+      <button class="back" id="cal-back"><i class="ti ti-chevron-left"></i> Aluno</button>
+      <div class="display day-title">Calendário</div>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:8px;">
+      ${offsets
+        .map((off) => {
+          const wk = addWeeks(activeKey, off);
+          const isPast = off < 0;
+          const isCurrent = off === 0;
+          const plan = plans.find((p) => p.weekKey === wk);
+          const vol = isCurrent ? dayVolume({ exercises: (client.days || []).flatMap((d) => d.exercises || []) }) : null;
+
+          let statusHTML = "";
+          let icon = "ti-calendar";
+          let iconColor = "var(--steel)";
+          let cardStyle = "background:var(--panel);border:1px solid var(--line);";
+
+          if (isPast) {
+            icon = "ti-check";
+            iconColor = "#639922";
+            cardStyle += "opacity:.65;";
+            const summary = pastWeekSummary(client, wk);
+            statusHTML = summary.length ? `Concluída · ${summary.reduce((a, e) => a + e.sets.length, 0)} séries registradas` : "Sem registros";
+          } else if (isCurrent) {
+            icon = "ti-flame";
+            iconColor = "var(--red)";
+            cardStyle = "background:#2A2018;border:1px solid var(--red);";
+            statusHTML = `Semana atual · ${vol.done}/${vol.total} séries`;
+          } else if (plan) {
+            icon = "ti-calendar-event";
+            iconColor = "var(--plate)";
+            statusHTML = "Planejada";
+          } else {
+            statusHTML = editable ? "Ainda não planejada" : "Ainda não disponível";
+          }
+
+          return `
+          <div class="cal-row" data-calweek="${wk}" data-caloff="${off}" style="${cardStyle} border-radius:10px; padding:10px 12px; display:flex; align-items:center; gap:10px; cursor:pointer;">
+            <i class="ti ${icon}" style="color:${iconColor}; font-size:18px;"></i>
+            <div style="flex:1;">
+              <div style="color:var(--chalk); font-size:13px; ${isCurrent ? "font-weight:600;" : ""}">${weekRangeLabel(wk)}</div>
+              <div style="color:var(--muted); font-size:11px;">${statusHTML}</div>
+            </div>
+            ${editable && !isPast && !isCurrent ? `<i class="ti ${plan ? "ti-edit" : "ti-plus"}" style="color:var(--plate); font-size:15px;"></i>` : ""}
+            ${!editable && !isPast && !isCurrent && !plan ? "" : `<i class="ti ti-chevron-right" style="color:var(--muted); font-size:15px;"></i>`}
+          </div>`;
+        })
+        .join("")}
+    </div>`;
+}
+
+function wireCalendar(client, editable) {
+  const backBtn = el("cal-back");
+  if (backBtn) backBtn.onclick = () => { ui.calendarOpen = false; render(); };
+
+  document.querySelectorAll("[data-calweek]").forEach((row) => {
+    row.onclick = async () => {
+      const wk = row.dataset.calweek;
+      const off = parseInt(row.dataset.caloff, 10);
+      const activeKey = client.activeWeekKey || weekKeyOf(todayKey());
+
+      if (off < 0) return; // semanas passadas: só o resumo já mostrado no card, sem tela própria por ora
+      if (off === 0) {
+        ui.calendarOpen = false; // semana atual: volta pra grade normal de treinos
+        render();
+        return;
+      }
+
+      // semana futura
+      const plans = client.weekPlans || [];
+      let plan = plans.find((p) => p.weekKey === wk);
+      if (!plan && editable) {
+        plan = { id: uid(), weekKey: wk, days: cloneDaysWithNewIds(client.days || []) };
+        const nextPlans = [...plans, plan];
+        await saveClient(client.id, { weekPlans: nextPlans, activeWeekKey: activeKey });
+      }
+      if (!plan) return; // aluno tentando abrir semana ainda sem plano
+      ui.calendarOpen = false;
+      ui.planWeekKey = wk;
+      render();
+    };
+  });
+}
+
+function planEditHTML(client, editable) {
+  const plan = (client.weekPlans || []).find((p) => p.weekKey === ui.planWeekKey);
+  if (!plan) {
+    return `<p class="muted-note">Essa semana ainda não tem um plano.</p>
+      <button class="back" id="plan-back"><i class="ti ti-chevron-left"></i> Calendário</button>`;
+  }
+  // reaproveita a mesma área de treinos, só que "olhando" pros dias do plano
+  const proxyClient = { ...client, days: plan.days, __planId: plan.id };
+  return `
+    <div class="day-head">
+      <button class="back" id="plan-back"><i class="ti ti-chevron-left"></i> Calendário</button>
+      <div class="display day-title" style="font-size:16px;">Plano — ${weekRangeLabel(plan.weekKey)}</div>
+    </div>
+    ${
+      editable
+        ? `<div style="display:flex; gap:8px; margin-bottom:12px;">
+            <button class="dashed-btn" id="plan-activate"><i class="ti ti-check"></i> Ativar essa semana agora</button>
+            <button class="dashed-btn" id="plan-delete"><i class="ti ti-trash"></i> Apagar plano</button>
+          </div>`
+        : ""
+    }
+    ${clientAreaHTMLInner(proxyClient, editable)}
+  `;
+}
+
+function wirePlanEdit(client, editable) {
+  const backBtn = el("plan-back");
+  if (backBtn) backBtn.onclick = () => { ui.planWeekKey = null; ui.calendarOpen = true; render(); };
+
+  const plan = (client.weekPlans || []).find((p) => p.weekKey === ui.planWeekKey);
+  if (!plan) return;
+  const proxyClient = { ...client, days: plan.days, __planId: plan.id };
+
+  const activateBtn = el("plan-activate");
+  if (activateBtn) {
+    activateBtn.onclick = async () => {
+      if (!confirm(`Ativar o plano de ${weekRangeLabel(plan.weekKey)} como semana atual agora? Isso substitui o treino atual do aluno.`)) return;
+      const nextPlans = (client.weekPlans || []).filter((p) => p.id !== plan.id);
+      await saveClient(client.id, { days: plan.days, activeWeekKey: plan.weekKey, weekPlans: nextPlans });
+      ui.planWeekKey = null;
+      ui.calendarOpen = false;
+    };
+  }
+  const deleteBtn = el("plan-delete");
+  if (deleteBtn) {
+    deleteBtn.onclick = async () => {
+      if (!confirm("Apagar esse plano de semana futura?")) return;
+      const nextPlans = (client.weekPlans || []).filter((p) => p.id !== plan.id);
+      await saveClient(client.id, { weekPlans: nextPlans });
+      ui.planWeekKey = null;
+      ui.calendarOpen = true;
+    };
+  }
+
+  wireClientAreaInner(proxyClient, editable);
 }
 
 // ---------- crescimento automático dos quadrados meta/kg ----------
