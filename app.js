@@ -47,6 +47,7 @@ auth.onAuthStateChanged((user) => {
     ui = { view: "trainer", selectedId: null, activeDayId: null };
     unsubscribe = db.collection("clients").onSnapshot((snap) => {
       clients = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      clients.forEach((c) => maybePromoteWeek(c));
       render();
     });
   } else {
@@ -56,6 +57,7 @@ auth.onAuthStateChanged((user) => {
       .where("email", "==", user.email.toLowerCase())
       .onSnapshot((snap) => {
         myClient = snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() };
+        if (myClient) maybePromoteWeek(myClient);
         render();
       });
   }
@@ -107,16 +109,43 @@ async function createStudent(name, email, password, copyDaysFrom) {
 
 // clona os dias de treino de outro aluno, gerando ids novos pra tudo
 // (dias, exercícios e séries), sem carregar nenhum histórico/progresso junto
-function cloneDaysWithNewIds(days) {
+function cloneDaysWithNewIds(days, resetDone = true) {
   return (days || []).map((d) => ({
     ...d,
     id: uid(),
     exercises: (d.exercises || []).map((ex) => ({
       ...ex,
       id: uid(),
-      sets: (ex.sets || []).map((s) => ({ ...s, id: uid(), repsDone: "" })),
+      sets: (ex.sets || []).map((s) => ({ ...s, id: uid(), repsDone: resetDone ? "" : s.repsDone })),
     })),
   }));
+}
+
+// verifica se a semana virou de verdade (no calendário) e, se tiver um plano
+// pronto pra essa semana, promove ele automaticamente pra virar o treino atual —
+// sem precisar de nenhum clique do treinador
+const promotedThisSession = new Set();
+async function maybePromoteWeek(client) {
+  const currentKey = weekKeyOf(todayKey());
+  const activeKey = client.activeWeekKey || currentKey;
+  if (currentKey === activeKey) return;
+  if (currentKey < activeKey) return; // segurança: nunca "volta" a semana
+  const sessionFlag = client.id + ":" + currentKey;
+  if (promotedThisSession.has(sessionFlag)) return;
+  promotedThisSession.add(sessionFlag);
+
+  const plans = client.weekPlans || [];
+  const plan = plans.find((p) => p.weekKey === currentKey);
+  try {
+    if (plan) {
+      const nextPlans = plans.filter((p) => p.id !== plan.id);
+      await saveClient(client.id, { days: plan.days, activeWeekKey: currentKey, weekPlans: nextPlans });
+    } else {
+      await saveClient(client.id, { activeWeekKey: currentKey });
+    }
+  } catch (e) {
+    promotedThisSession.delete(sessionFlag); // libera pra tentar de novo depois
+  }
 }
 
 async function removeStudentDoc(clientId) {
@@ -1575,7 +1604,7 @@ function wireCalendar(client, editable) {
       const plans = client.weekPlans || [];
       let plan = plans.find((p) => p.weekKey === wk);
       if (!plan && editable) {
-        plan = { id: uid(), weekKey: wk, days: cloneDaysWithNewIds(client.days || []) };
+        plan = { id: uid(), weekKey: wk, days: cloneDaysWithNewIds(client.days || [], false) };
         const nextPlans = [...plans, plan];
         await saveClient(client.id, { weekPlans: nextPlans, activeWeekKey: activeKey });
       }
