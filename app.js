@@ -62,9 +62,18 @@ auth.onAuthStateChanged((user) => {
       });
   }
   render();
+
+  if (lastTypedLogin) {
+    const pendingLogin = lastTypedLogin;
+    lastTypedLogin = null;
+    setTimeout(() => maybeOfferFaceId(pendingLogin), 400);
+  }
 });
 
+let lastTypedLogin = null; // guarda o que a pessoa digitou, pra poder oferecer Face ID depois de logar
+
 function doLogin(email, password) {
+  lastTypedLogin = { email, password };
   auth.signInWithEmailAndPassword(email, password).catch((e) => {
     ui.error = traduzErro(e.code);
     render();
@@ -74,6 +83,86 @@ function doLogin(email, password) {
 function doLogout() {
   ui.studentEnteredTreinos = false;
   auth.signOut();
+}
+
+// ---------- Face ID / Touch ID (atalho local no aparelho, sem servidor) ----------
+
+function faceIdSupported() {
+  return !!(window.PublicKeyCredential && navigator.credentials);
+}
+
+async function registerFaceId(email, password) {
+  const challenge = crypto.getRandomValues(new Uint8Array(32));
+  const userId = crypto.getRandomValues(new Uint8Array(16));
+  const cred = await navigator.credentials.create({
+    publicKey: {
+      challenge,
+      rp: { name: "Meu Treino", id: location.hostname },
+      user: { id: userId, name: email, displayName: email },
+      pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }],
+      authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required" },
+      timeout: 60000,
+    },
+  });
+  const credId = btoa(String.fromCharCode(...new Uint8Array(cred.rawId)));
+  localStorage.setItem("mt_faceid_cred", credId);
+  localStorage.setItem("mt_faceid_email", email);
+  localStorage.setItem("mt_faceid_password", password);
+}
+
+async function tryFaceIdLogin() {
+  const credId = localStorage.getItem("mt_faceid_cred");
+  if (!credId) return;
+  const challenge = crypto.getRandomValues(new Uint8Array(32));
+  const rawId = Uint8Array.from(atob(credId), (c) => c.charCodeAt(0));
+  try {
+    await navigator.credentials.get({
+      publicKey: {
+        challenge,
+        allowCredentials: [{ id: rawId, type: "public-key" }],
+        userVerification: "required",
+        timeout: 60000,
+      },
+    });
+    const email = localStorage.getItem("mt_faceid_email");
+    const password = localStorage.getItem("mt_faceid_password");
+    if (email && password) doLogin(email, password);
+  } catch (e) {
+    ui.error = "Não foi possível confirmar. Use email e senha.";
+    render();
+  }
+}
+
+function forgetFaceId() {
+  localStorage.removeItem("mt_faceid_cred");
+  localStorage.removeItem("mt_faceid_email");
+  localStorage.removeItem("mt_faceid_password");
+}
+
+function maybeOfferFaceId(login) {
+  if (!faceIdSupported()) return;
+  if (localStorage.getItem("mt_faceid_cred")) return; // já ativado nesse aparelho
+  if (!login) return;
+  const banner = document.getElementById("install-banner");
+  if (!banner) return;
+  if (localStorage.getItem("mt_faceid_dismissed") === "1") return;
+
+  banner.classList.remove("hidden");
+  banner.innerHTML = `<span>Ativar Face ID/Touch ID nesse aparelho pra entrar sem digitar senha da próxima vez?</span>
+    <button id="fid-yes">Ativar</button>
+    <button id="fid-no"><i class="ti ti-x"></i></button>`;
+  document.getElementById("fid-yes").onclick = async () => {
+    try {
+      await registerFaceId(login.email, login.password);
+    } catch (e) {
+      // aparelho sem suporte ou usuário cancelou — sem problema, só ignora
+    }
+    banner.classList.add("hidden");
+  };
+  document.getElementById("fid-no").onclick = () => {
+    localStorage.setItem("mt_faceid_dismissed", "1");
+    banner.classList.add("hidden");
+  };
 }
 
 function traduzErro(code) {
@@ -223,26 +312,51 @@ function loadingHTML() {
 }
 
 function gateHTML() {
+  const hasFaceId = !!localStorage.getItem("mt_faceid_cred");
   return `
     <div class="gate">
       <div class="display" style="font-size:26px;">MEU TREINO</div>
       <p class="muted-note">Entre com o email e a senha que seu personal te enviou.</p>
-      <input id="g-email" type="email" placeholder="Email" autocomplete="username" />
-      <input id="g-pass" type="password" placeholder="Senha" autocomplete="current-password" />
-      ${ui.error ? `<div class="error">${ui.error}</div>` : ""}
-      <button class="primary" id="g-submit">ENTRAR</button>
+      ${
+        hasFaceId
+          ? `<button type="button" id="g-faceid" class="primary" style="display:flex;align-items:center;justify-content:center;gap:8px;">
+              <i class="ti ti-face-id"></i> Entrar com Face ID
+            </button>
+            <button type="button" id="g-faceid-manual" class="muted-note" style="text-decoration:underline;background:none;border:none;">usar email e senha</button>
+            <button type="button" id="g-faceid-forget" class="muted-note" style="text-decoration:underline;background:none;border:none;font-size:11px;">não é você? esquecer Face ID nesse aparelho</button>
+            <div id="g-manual-wrap" class="hidden" style="display:flex;flex-direction:column;gap:10px;width:100%;max-width:260px;">`
+          : ""
+      }
+      <form id="g-form" autocomplete="on" style="display:flex;flex-direction:column;gap:10px;width:100%;max-width:260px;">
+        <input id="g-email" type="email" name="email" placeholder="Email" autocomplete="username" />
+        <input id="g-pass" type="password" name="password" placeholder="Senha" autocomplete="current-password" />
+        ${ui.error ? `<div class="error">${ui.error}</div>` : ""}
+        <button type="submit" class="primary" id="g-submit">ENTRAR</button>
+      </form>
+      ${hasFaceId ? `</div>` : ""}
     </div>`;
 }
 
 function wireGate() {
-  const submit = () => {
-    const email = el("g-email").value.trim();
-    const pass = el("g-pass").value;
-    ui.error = "";
-    doLogin(email, pass);
-  };
-  el("g-submit").onclick = submit;
-  el("g-pass").onkeydown = (e) => { if (e.key === "Enter") submit(); };
+  const hasFaceId = !!localStorage.getItem("mt_faceid_cred");
+
+  if (hasFaceId) {
+    const manualWrap = el("g-manual-wrap");
+    el("g-faceid-manual").onclick = () => manualWrap.classList.toggle("hidden");
+    el("g-faceid").onclick = () => tryFaceIdLogin();
+    el("g-faceid-forget").onclick = () => { forgetFaceId(); render(); };
+  }
+
+  const form = el("g-form");
+  if (form) {
+    form.onsubmit = (e) => {
+      e.preventDefault();
+      const email = el("g-email").value.trim();
+      const pass = el("g-pass").value;
+      ui.error = "";
+      doLogin(email, pass);
+    };
+  }
 }
 
 function topbarHTML(name, extraBadge) {
