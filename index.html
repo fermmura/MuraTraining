@@ -14,19 +14,21 @@
 <link rel="apple-touch-icon" href="icon-192.png" />
 
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;500;600;700&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Anton&family=Bebas+Neue&family=Oswald:wght@400;500;600;700&family=Poppins:wght@400;500;600;700&family=Montserrat:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=Roboto:wght@400;500;600;700&family=Work+Sans:wght@400;500;600;700&family=Nunito+Sans:wght@400;500;600;700&display=swap');
   @import url('https://cdnjs.cloudflare.com/ajax/libs/tabler-icons/3.46.0/tabler-icons.min.css');
   .ti { font-size: inherit; vertical-align: -2px; }
   :root {
     --bg: #17161A; --panel: #211F25; --panelAlt: #2A2830; --line: #3A3742;
     --chalk: #F3EFE6; --muted: #9A94A6; --red: #FF4433; --redDim: #5C2620;
     --steel: #4C86B4; --plate: #E8B94A;
+    --font-display: 'Anton', 'Inter', sans-serif;
+    --font-body: 'Inter', system-ui, sans-serif;
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--chalk); font-family: 'Inter', system-ui, sans-serif;
+  body { margin: 0; background: var(--bg); color: var(--chalk); font-family: var(--font-body);
     min-height: 100vh; -webkit-tap-highlight-color: transparent;
     padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
-  .display { font-family: 'Anton', 'Inter', sans-serif; letter-spacing: .03em; }
+  .display { font-family: var(--font-display); letter-spacing: .03em; }
   input, textarea, button { font-family: inherit; }
   input, textarea { background: transparent; border: none; outline: none; color: var(--chalk); }
   input::placeholder, textarea::placeholder { color: var(--muted); }
@@ -74,6 +76,14 @@
   .sq.add { align-items: center; justify-content: center; border-style: dashed; color: var(--muted); }
   .sq[draggable="true"] { cursor: grab; }
   .cal-row:active { opacity: .8; }
+
+  /* personalização de tema */
+  .theme-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .theme-row label { font-size: 13px; color: var(--chalk); }
+  .theme-row input[type="color"] { width: 40px; height: 32px; border: 1px solid var(--line); border-radius: 6px; background: none; padding: 2px; cursor: pointer; }
+  .theme-row select { background: var(--panelAlt); color: var(--chalk); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font-size: 13px; }
+  .theme-preview-toggle { display: flex; align-items: center; gap: 8px; background: var(--panelAlt); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 14px; }
+  .theme-preview-toggle input { width: 18px; height: 18px; }
   .sq.dragging { opacity: .4; }
   .sq.drag-over { border-color: var(--red); background: var(--redDim); }
 

@@ -18,13 +18,49 @@ const uid = () => Math.random().toString(36).slice(2, 10);
 const el = (id) => document.getElementById(id);
 const appEl = document.getElementById("app");
 
+// ---------- personalização de tema ----------
+
+const DEFAULT_THEME = {
+  bg: "#17161A", panel: "#211F25", panelAlt: "#2A2830", line: "#3A3742",
+  chalk: "#F3EFE6", muted: "#9A94A6", red: "#FF4433", redDim: "#5C2620",
+  steel: "#4C86B4", plate: "#E8B94A",
+  fontDisplay: "Anton", fontBody: "Inter",
+};
+
+const FONT_DISPLAY_OPTIONS = ["Anton", "Bebas Neue", "Oswald", "Poppins", "Montserrat"];
+const FONT_BODY_OPTIONS = ["Inter", "Roboto", "Work Sans", "Nunito Sans", "Poppins"];
+
+function applyTheme(theme) {
+  const root = document.documentElement;
+  const t = { ...DEFAULT_THEME, ...theme };
+  ["bg", "panel", "panelAlt", "line", "chalk", "muted", "red", "redDim", "steel", "plate"].forEach((k) => {
+    root.style.setProperty("--" + k, t[k]);
+  });
+  root.style.setProperty("--font-display", `'${t.fontDisplay}', 'Inter', sans-serif`);
+  root.style.setProperty("--font-body", `'${t.fontBody}', system-ui, sans-serif`);
+}
+
+let publishedTheme = { ...DEFAULT_THEME };
+async function loadPublishedTheme() {
+  try {
+    const snap = await db.collection("settings").doc("theme").get();
+    if (snap.exists && snap.data().published) {
+      publishedTheme = { ...DEFAULT_THEME, ...snap.data().published };
+      applyTheme(publishedTheme);
+    }
+  } catch (e) {
+    // sem tema salvo ainda, ou sem internet — segue com o padrão
+  }
+}
+loadPublishedTheme();
+
 let currentUser = null; // objeto do Firebase Auth
 let isTrainer = false;
 let clients = []; // só preenchido para o treinador
 let myClient = null; // só preenchido para o aluno
 let unsubscribe = null;
 
-let ui = { view: "loading", selectedId: null, activeDayId: null, progOpen: false, progMode: "table", progKey: null, studentEnteredTreinos: false, calendarOpen: false, planWeekKey: null };
+let ui = { view: "loading", selectedId: null, activeDayId: null, progOpen: false, progMode: "table", progKey: null, studentEnteredTreinos: false, calendarOpen: false, planWeekKey: null, themeOpen: false };
 let draggedDayId = null;
 let collapsedEx = {}; // exercícios minimizados; por padrão, todo exercício começa minimizado
 const isCollapsed = (exId) => collapsedEx[exId] !== false;
@@ -373,12 +409,17 @@ function topbarHTML(name, extraBadge) {
 // ---------------- TREINADOR ----------------
 
 function trainerHTML() {
+  if (ui.themeOpen) return themeHTML();
+
   const selected = clients.find((c) => c.id === ui.selectedId) || null;
   return `
     ${topbarHTML("Personal", "modo treinador")}
     <div class="layout">
       <div class="sidebar">
-        <h1 class="display">ALUNOS</h1>
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <h1 class="display">ALUNOS</h1>
+          <button id="open-theme" style="color:var(--muted);font-size:18px;" aria-label="Personalizar visual"><i class="ti ti-palette"></i></button>
+        </div>
         <button class="dashed-btn" id="btn-add-client" style="width:100%;justify-content:center;margin-bottom:10px;">+ novo aluno</button>
         <div id="add-client-form" class="hidden" style="display:flex;flex-direction:column;gap:6px;background:var(--panelAlt);padding:8px;border-radius:8px;margin-bottom:10px;">
           <input id="nc-name" placeholder="Nome do aluno" />
@@ -423,8 +464,157 @@ function trainerHTML() {
     </div>`;
 }
 
+// ---------------- PERSONALIZAÇÃO DE VISUAL ----------------
+
+let draftTheme = null; // carregado do Firestore ao abrir o painel
+let previewOn = false;
+
+function colorRow(key, label) {
+  return `
+    <div class="theme-row">
+      <label>${label}</label>
+      <input type="color" data-tkey="${key}" value="${draftTheme[key]}" />
+    </div>`;
+}
+
+function themeHTML() {
+  if (!draftTheme) draftTheme = { ...publishedTheme };
+  return `
+    ${topbarHTML("Personalização", "modo treinador")}
+    <div class="main solo" style="max-width:420px;">
+      <button class="back" id="theme-back" style="margin-bottom:14px;"><i class="ti ti-chevron-left"></i> Alunos</button>
+
+      <div class="theme-preview-toggle">
+        <input type="checkbox" id="theme-preview" ${previewOn ? "checked" : ""} />
+        <label for="theme-preview" style="flex:1;">Modo prévia — só você vê essas mudanças até publicar</label>
+      </div>
+
+      <p class="muted-note" style="text-transform:uppercase;font-size:11px;font-weight:700;letter-spacing:.05em;margin-bottom:0;">Cores</p>
+      ${colorRow("bg", "Fundo")}
+      ${colorRow("panel", "Painel")}
+      ${colorRow("panelAlt", "Painel (alt)")}
+      ${colorRow("line", "Bordas")}
+      ${colorRow("chalk", "Texto principal")}
+      ${colorRow("muted", "Texto secundário")}
+      ${colorRow("red", "Destaque (botões)")}
+      ${colorRow("redDim", "Destaque escuro")}
+      ${colorRow("steel", "Cor do kg")}
+      ${colorRow("plate", "Cor da meta")}
+
+      <p class="muted-note" style="text-transform:uppercase;font-size:11px;font-weight:700;letter-spacing:.05em;margin:16px 0 0;">Fontes</p>
+      <div class="theme-row">
+        <label>Títulos</label>
+        <select id="theme-font-display">
+          ${FONT_DISPLAY_OPTIONS.map((f) => `<option value="${f}" ${draftTheme.fontDisplay === f ? "selected" : ""}>${f}</option>`).join("")}
+        </select>
+      </div>
+      <div class="theme-row" style="border-bottom:none;">
+        <label>Texto</label>
+        <select id="theme-font-body">
+          ${FONT_BODY_OPTIONS.map((f) => `<option value="${f}" ${draftTheme.fontBody === f ? "selected" : ""}>${f}</option>`).join("")}
+        </select>
+      </div>
+
+      <div style="display:flex; flex-direction:column; gap:10px; margin-top:20px;">
+        <button class="cta" id="theme-publish">Publicar pros alunos</button>
+        <button class="dashed-btn" id="theme-discard" style="justify-content:center;">Descartar alterações</button>
+        <button class="dashed-btn" id="theme-reset" style="justify-content:center; color:var(--red); border-color:var(--red);"><i class="ti ti-refresh"></i> Restaurar padrão (aplica na hora)</button>
+      </div>
+    </div>`;
+}
+
+function wireTheme() {
+  const backBtn = el("theme-back");
+  if (backBtn) backBtn.onclick = () => {
+    ui.themeOpen = false;
+    previewOn = false;
+    applyTheme(publishedTheme); // sai do modo prévia, volta pro que tá publicado
+    render();
+  };
+
+  const previewCheck = el("theme-preview");
+  if (previewCheck) {
+    previewCheck.onchange = () => {
+      previewOn = previewCheck.checked;
+      applyTheme(previewOn ? draftTheme : publishedTheme);
+    };
+  }
+
+  document.querySelectorAll("[data-tkey]").forEach((input) => {
+    input.oninput = () => {
+      draftTheme[input.dataset.tkey] = input.value;
+      if (previewOn) applyTheme(draftTheme);
+    };
+  });
+
+  const fontDisplaySelect = el("theme-font-display");
+  if (fontDisplaySelect) {
+    fontDisplaySelect.onchange = () => {
+      draftTheme.fontDisplay = fontDisplaySelect.value;
+      if (previewOn) applyTheme(draftTheme);
+    };
+  }
+  const fontBodySelect = el("theme-font-body");
+  if (fontBodySelect) {
+    fontBodySelect.onchange = () => {
+      draftTheme.fontBody = fontBodySelect.value;
+      if (previewOn) applyTheme(draftTheme);
+    };
+  }
+
+  const publishBtn = el("theme-publish");
+  if (publishBtn) {
+    publishBtn.onclick = async () => {
+      publishBtn.textContent = "Publicando…";
+      try {
+        await db.collection("settings").doc("theme").set({ draft: draftTheme, published: draftTheme }, { merge: true });
+        publishedTheme = { ...draftTheme };
+        applyTheme(publishedTheme);
+        publishBtn.textContent = "Publicado!";
+        setTimeout(() => (publishBtn.textContent = "Publicar pros alunos"), 1500);
+      } catch (e) {
+        publishBtn.textContent = "Erro ao publicar";
+      }
+    };
+  }
+
+  const discardBtn = el("theme-discard");
+  if (discardBtn) {
+    discardBtn.onclick = () => {
+      draftTheme = { ...publishedTheme };
+      applyTheme(previewOn ? draftTheme : publishedTheme);
+      render();
+    };
+  }
+
+  const resetBtn = el("theme-reset");
+  if (resetBtn) {
+    resetBtn.onclick = async () => {
+      if (!confirm("Restaurar o visual padrão pra todo mundo agora? Isso publica na hora, sem precisar de prévia.")) return;
+      draftTheme = { ...DEFAULT_THEME };
+      publishedTheme = { ...DEFAULT_THEME };
+      applyTheme(publishedTheme);
+      try {
+        await db.collection("settings").doc("theme").set({ draft: DEFAULT_THEME, published: DEFAULT_THEME }, { merge: true });
+      } catch (e) {
+        alert("Restaurado na tela, mas houve um erro ao salvar. Tente de novo com internet.");
+      }
+      render();
+    };
+  }
+}
+
 function wireTrainer() {
   el("btn-logout").onclick = doLogout;
+
+  if (ui.themeOpen) {
+    wireTheme();
+    return;
+  }
+
+  const openThemeBtn = el("open-theme");
+  if (openThemeBtn) openThemeBtn.onclick = () => { ui.themeOpen = true; render(); };
+
   el("btn-add-client").onclick = () => { el("add-client-form").classList.remove("hidden"); };
   el("nc-cancel").onclick = () => { el("add-client-form").classList.add("hidden"); };
   el("nc-save").onclick = async () => {

@@ -28,5 +28,12 @@ service cloud.firestore {
         request.resource.data.email == resource.data.email &&
         request.resource.data.goal == resource.data.goal;
     }
+
+    // tema visual do app: qualquer pessoa logada pode ler (afeta a tela de
+    // todo mundo), mas só o personal pode alterar
+    match /settings/{doc} {
+      allow read: if true;
+      allow write: if isTrainer();
+    }
   }
 }
