@@ -5,6 +5,7 @@
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
+const storage = firebase.storage();
 
 // habilita cache offline (o navegador guarda os dados e sincroniza
 // automaticamente quando a internet voltar)
@@ -906,6 +907,22 @@ function exerciseHTML(ex, editable, index, total) {
           <label>ANOTAÇÕES</label>
           <textarea rows="3" data-field="notes" data-autogrow="1" placeholder="ex.: preparatória com 2 séries leves de 15 reps; trabalho com cadência 2-0-2, descanso 90s"
             ${editable ? "" : "readonly"}>${escapeHTML(ex.notes || "")}</textarea>
+          ${
+            ex.photoUrl
+              ? `<div style="margin-top:8px;position:relative;">
+                  <a href="${escapeHTML(ex.photoUrl)}" target="_blank" rel="noopener">
+                    <img src="${escapeHTML(ex.photoUrl)}" alt="Foto do exercício ${escapeHTML(ex.name || "")}" style="width:100%;max-height:220px;object-fit:cover;border-radius:8px;display:block;" />
+                  </a>
+                  ${editable ? `<button data-rmphoto="${ex.id}" class="rm-x" style="position:absolute;top:6px;right:6px;background:rgba(0,0,0,.6);border-radius:6px;padding:4px;"><i class="ti ti-trash"></i></button>` : ""}
+                </div>`
+              : editable
+              ? `<label class="dashed-btn" style="margin-top:8px;display:inline-flex;cursor:pointer;">
+                  <i class="ti ti-photo-plus"></i> Adicionar foto
+                  <input type="file" accept="image/*" data-photoinput="${ex.id}" class="hidden" />
+                </label>
+                <span data-photostatus="${ex.id}" class="muted-note" style="margin-left:6px;font-size:11px;"></span>`
+              : ""
+          }
         </div>
         <div>
           <label style="font-size:11px;font-weight:700;color:var(--muted);">SÉRIES DE TRABALHO</label>
@@ -1159,6 +1176,45 @@ function wireClientAreaInner(client, editable) {
       growTextarea(el);
       el.oninput = () => growTextarea(el);
     });
+
+    const photoInput = card.querySelector(`[data-photoinput="${exId}"]`);
+    if (photoInput) {
+      photoInput.onchange = async () => {
+        const file = photoInput.files[0];
+        if (!file) return;
+        const statusEl = card.querySelector(`[data-photostatus="${exId}"]`);
+        if (statusEl) statusEl.textContent = "enviando…";
+        try {
+          const path = `photos/${client.id}/${exId}-${Date.now()}-${file.name}`;
+          const ref = storage.ref().child(path);
+          await ref.put(file);
+          const url = await ref.getDownloadURL();
+          const days = (client.days || []).map((d) => {
+            if (d.id !== ui.activeDayId) return d;
+            return { ...d, exercises: (d.exercises || []).map((ex) => (ex.id === exId ? { ...ex, photoUrl: url } : ex)) };
+          });
+          updateDays(client, days);
+        } catch (e) {
+          if (statusEl) statusEl.textContent = "erro ao enviar";
+        }
+      };
+    }
+
+    const rmPhotoBtn = card.querySelector(`[data-rmphoto="${exId}"]`);
+    if (rmPhotoBtn) {
+      rmPhotoBtn.onclick = async () => {
+        if (!confirm("Remover essa foto?")) return;
+        const currentEx = (client.days || []).flatMap((d) => d.exercises || []).find((ex) => ex.id === exId);
+        const days = (client.days || []).map((d) => {
+          if (d.id !== ui.activeDayId) return d;
+          return { ...d, exercises: (d.exercises || []).map((ex) => (ex.id === exId ? { ...ex, photoUrl: "" } : ex)) };
+        });
+        updateDays(client, days);
+        if (currentEx && currentEx.photoUrl) {
+          try { await storage.refFromURL(currentEx.photoUrl).delete(); } catch (e) { /* arquivo já pode ter sido removido, sem problema */ }
+        }
+      };
+    }
 
     const addSetBtn = card.querySelector(`[data-addset="${exId}"]`);
     if (addSetBtn) addSetBtn.onclick = () => {
