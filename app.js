@@ -5,7 +5,6 @@
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
-const storage = firebase.storage();
 
 // habilita cache offline (o navegador guarda os dados e sincroniza
 // automaticamente quando a internet voltar)
@@ -1183,36 +1182,33 @@ function wireClientAreaInner(client, editable) {
         const file = photoInput.files[0];
         if (!file) return;
         const statusEl = card.querySelector(`[data-photostatus="${exId}"]`);
-        if (statusEl) statusEl.textContent = "enviando…";
+        if (statusEl) statusEl.textContent = "comprimindo…";
         try {
-          const path = `photos/${client.id}/${exId}-${Date.now()}-${file.name}`;
-          const ref = storage.ref().child(path);
-          await ref.put(file);
-          const url = await ref.getDownloadURL();
+          const dataUrl = await compressImageToDataUrl(file, 700, 0.6);
+          if (dataUrl.length > 700000) {
+            if (statusEl) statusEl.textContent = "foto muito grande/detalhada, tente outra";
+            return;
+          }
           const days = (client.days || []).map((d) => {
             if (d.id !== ui.activeDayId) return d;
-            return { ...d, exercises: (d.exercises || []).map((ex) => (ex.id === exId ? { ...ex, photoUrl: url } : ex)) };
+            return { ...d, exercises: (d.exercises || []).map((ex) => (ex.id === exId ? { ...ex, photoUrl: dataUrl } : ex)) };
           });
           updateDays(client, days);
         } catch (e) {
-          if (statusEl) statusEl.textContent = "erro ao enviar";
+          if (statusEl) statusEl.textContent = "erro ao processar a foto";
         }
       };
     }
 
     const rmPhotoBtn = card.querySelector(`[data-rmphoto="${exId}"]`);
     if (rmPhotoBtn) {
-      rmPhotoBtn.onclick = async () => {
+      rmPhotoBtn.onclick = () => {
         if (!confirm("Remover essa foto?")) return;
-        const currentEx = (client.days || []).flatMap((d) => d.exercises || []).find((ex) => ex.id === exId);
         const days = (client.days || []).map((d) => {
           if (d.id !== ui.activeDayId) return d;
           return { ...d, exercises: (d.exercises || []).map((ex) => (ex.id === exId ? { ...ex, photoUrl: "" } : ex)) };
         });
         updateDays(client, days);
-        if (currentEx && currentEx.photoUrl) {
-          try { await storage.refFromURL(currentEx.photoUrl).delete(); } catch (e) { /* arquivo já pode ter sido removido, sem problema */ }
-        }
       };
     }
 
@@ -2040,6 +2036,32 @@ function growBox(input) {
   if (!box) return;
   const len = (input.value || "").length;
   box.style.width = Math.max(30, len * 11 + 22) + "px";
+}
+
+// redimensiona e comprime a foto no próprio navegador antes de salvar
+// (sem precisar de nenhum servidor de armazenamento — fica leve o suficiente
+// pra caber direto no banco de dados que já usamos)
+function compressImageToDataUrl(file, maxDim, quality) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const reader = new FileReader();
+    reader.onload = () => {
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > height && width > maxDim) { height = Math.round((height * maxDim) / width); width = maxDim; }
+        else if (height > maxDim) { width = Math.round((width * maxDim) / height); height = maxDim; }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.onerror = reject;
+      img.src = reader.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
 }
 
 function growTextarea(el) {
