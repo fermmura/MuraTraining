@@ -452,7 +452,8 @@ function trainerHTML() {
                       <input class="ce pw-input" data-pwinput="${c.id}" value="${attr(c.password || "")}" placeholder="não registrada" style="flex:1;color:var(--plate);" />
                       <button class="copy-btn" data-pwsave="${c.id}">salvar</button>
                     </div>
-                    <button class="copy-btn" data-resetlogin="${c.id}" style="margin-top:4px;width:100%;">recriar login com senha nova</button>`
+                    <button class="copy-btn" data-resetlogin="${c.id}" style="margin-top:4px;width:100%;">recriar login com senha nova</button>
+                    <button class="copy-btn" data-deleteclient="${c.id}" style="margin-top:4px;width:100%;color:var(--red);border-color:var(--red);">excluir aluno</button>`
                   : ""
               }
             </div>`;
@@ -697,6 +698,27 @@ function wireTrainer() {
       } catch (err) {
         alert("Erro: " + traduzErro(err.code));
         btn.textContent = "recriar login com senha nova";
+      }
+    };
+  });
+
+  document.querySelectorAll("[data-deleteclient]").forEach((btn) => {
+    btn.onclick = async (e) => {
+      e.stopPropagation();
+      const clientId = btn.dataset.deleteclient;
+      const c = clients.find((x) => x.id === clientId);
+      const typed = prompt(`Isso apaga TODOS os treinos, histórico e dados de "${c.name}" — não tem como desfazer.\n\nPra confirmar, digite o nome dele exatamente como está: ${c.name}`);
+      if (typed !== c.name) {
+        if (typed !== null) alert("Nome não bateu. Nada foi apagado.");
+        return;
+      }
+      btn.textContent = "excluindo…";
+      try {
+        await removeStudentDoc(clientId);
+        if (ui.selectedId === clientId) ui.selectedId = null;
+      } catch (err) {
+        alert("Erro ao excluir: " + err.message);
+        btn.textContent = "excluir aluno";
       }
     };
   });
