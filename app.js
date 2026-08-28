@@ -805,6 +805,14 @@ function clientAreaHTMLInner(client, editable) {
           : ""
       }
       ${
+        editable && !client.__planId
+          ? `<div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
+               <button class="dashed-btn" id="rir-unlock-all" style="color:var(--plate);border-color:var(--plate);"><i class="ti ti-lock-open"></i> Liberar RIR de tudo p/ ${escapeHTML(client.name.split(" ")[0])}</button>
+               <button class="dashed-btn" id="rir-lock-all"><i class="ti ti-lock"></i> Travar RIR de tudo</button>
+             </div>`
+          : ""
+      }
+      ${
         !client.__planId
           ? `<div style="display:flex; gap:8px; margin-bottom:12px;">
               <button class="dashed-btn" id="open-calendar"><i class="ti ti-calendar-stats"></i> Calendário</button>
@@ -1034,6 +1042,30 @@ function wireClientAreaInner(client, editable) {
     openCardioBtn.onclick = () => {
       ui.cardioOpen = true;
       render();
+    };
+  }
+
+  const setAllRir = (enabled) => (d) => ({
+    ...d,
+    exercises: (d.exercises || []).map((ex) => ({
+      ...ex,
+      sets: (ex.sets || []).map((s) => ({ ...s, rirEnabled: enabled })),
+    })),
+  });
+
+  const unlockAllBtn = document.getElementById("rir-unlock-all");
+  if (unlockAllBtn) {
+    unlockAllBtn.onclick = () => {
+      if (!confirm(`Liberar o RIR de TODAS as séries, em TODOS os treinos de ${client.name}? Ele vai poder preencher o RIR de tudo a partir de agora.`)) return;
+      updateDays(client, (client.days || []).map(setAllRir(true)));
+    };
+  }
+
+  const lockAllBtn = document.getElementById("rir-lock-all");
+  if (lockAllBtn) {
+    lockAllBtn.onclick = () => {
+      if (!confirm(`Travar o RIR de todas as séries de ${client.name} de novo? Ele deixa de poder editar até você liberar.`)) return;
+      updateDays(client, (client.days || []).map(setAllRir(false)));
     };
   }
 
