@@ -60,7 +60,7 @@ let clients = []; // só preenchido para o treinador
 let myClient = null; // só preenchido para o aluno
 let unsubscribe = null;
 
-let ui = { view: "loading", selectedId: null, activeDayId: null, progOpen: false, progMode: "table", progKey: null, studentEnteredTreinos: false, calendarOpen: false, planWeekKey: null, themeOpen: false };
+let ui = { view: "loading", selectedId: null, activeDayId: null, progOpen: false, progMode: "table", progKey: null, studentEnteredTreinos: false, calendarOpen: false, planWeekKey: null, themeOpen: false, cardioOpen: false };
 let draggedDayId = null;
 let collapsedEx = {}; // exercícios minimizados; por padrão, todo exercício começa minimizado
 const isCollapsed = (exId) => collapsedEx[exId] !== false;
@@ -786,6 +786,7 @@ function clientAreaHTML(client, editable) {
   if (editable && ui.progOpen) return progressionHTML(client);
   if (ui.calendarOpen) return calendarHTML(client, editable);
   if (ui.planWeekKey) return planEditHTML(client, editable);
+  if (ui.cardioOpen) return cardioHTML(client, editable);
   return clientAreaHTMLInner(client, editable);
 }
 
@@ -803,7 +804,14 @@ function clientAreaHTMLInner(client, editable) {
              </div>`
           : ""
       }
-      ${!client.__planId ? `<button class="dashed-btn" id="open-calendar" style="margin-bottom:12px;"><i class="ti ti-calendar-stats"></i> Calendário</button>` : ""}
+      ${
+        !client.__planId
+          ? `<div style="display:flex; gap:8px; margin-bottom:12px;">
+              <button class="dashed-btn" id="open-calendar"><i class="ti ti-calendar-stats"></i> Calendário</button>
+              <button class="dashed-btn" id="open-cardio"><i class="ti ti-heart-rate-monitor"></i> Cardio</button>
+            </div>`
+          : ""
+      }
       <div class="grid ${editable ? "" : "stacked"}">
         ${(client.days || [])
           .map((d, dayIdx, dayArr) => {
@@ -991,6 +999,10 @@ function wireClientArea(client, editable) {
     wirePlanEdit(client, editable);
     return;
   }
+  if (ui.cardioOpen) {
+    wireCardio(client, editable);
+    return;
+  }
 
   wireClientAreaInner(client, editable);
 }
@@ -1013,6 +1025,14 @@ function wireClientAreaInner(client, editable) {
   if (openCalBtn) {
     openCalBtn.onclick = () => {
       ui.calendarOpen = true;
+      render();
+    };
+  }
+
+  const openCardioBtn = document.getElementById("open-cardio");
+  if (openCardioBtn) {
+    openCardioBtn.onclick = () => {
+      ui.cardioOpen = true;
       render();
     };
   }
@@ -1971,6 +1991,149 @@ function wireCalendar(client, editable) {
     };
   });
 }
+
+// ---------- cardio ----------
+
+const CARDIO_ZONES = [
+  { key: "Z1", label: "Z1 · muito leve", color: "var(--muted)" },
+  { key: "Z2", label: "Z2 · leve", color: "var(--steel)" },
+  { key: "Z3", label: "Z3 · moderada", color: "var(--plate)" },
+  { key: "Z4", label: "Z4 · intensa", color: "#E8875A" },
+  { key: "Z5", label: "Z5 · máxima", color: "var(--red)" },
+];
+function zoneInfo(key) {
+  return CARDIO_ZONES.find((z) => z.key === key) || { key, label: key || "-", color: "var(--muted)" };
+}
+
+function cardioTotals(client, sinceDateKey) {
+  const entries = (client.cardio || []).filter((e) => e.dateKey >= sinceDateKey);
+  const totalMin = entries.reduce((sum, e) => sum + (Number(e.minutes) || 0), 0);
+  const byZone = {};
+  for (const e of entries) {
+    if (!e.zone) continue;
+    byZone[e.zone] = (byZone[e.zone] || 0) + (Number(e.minutes) || 0);
+  }
+  return { totalMin, byZone, count: entries.length };
+}
+
+function monthStartKey(dateKey) {
+  return dateKey.slice(0, 7) + "-01";
+}
+
+function cardioHTML(client, editable) {
+  const weekTotals = cardioTotals(client, weekKeyOf(todayKey()));
+  const monthTotals = cardioTotals(client, monthStartKey(todayKey()));
+  const entries = [...(client.cardio || [])].sort((a, b) => b.dateKey.localeCompare(a.dateKey));
+
+  const zoneBreakdown = (totals) =>
+    Object.keys(totals.byZone).length === 0
+      ? ""
+      : `<div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:6px;">
+          ${Object.entries(totals.byZone)
+            .map(([z, min]) => {
+              const zi = zoneInfo(z);
+              return `<span style="font-size:11px; color:${zi.color}; border:1px solid var(--line); border-radius:20px; padding:2px 8px;">${zi.key} · ${min}min</span>`;
+            })
+            .join("")}
+        </div>`;
+
+  return `
+    <div class="day-head">
+      <button class="back" id="cardio-back"><i class="ti ti-chevron-left"></i> Aluno</button>
+      <div class="display day-title" style="font-size:18px;">Cardio</div>
+    </div>
+
+    <div style="display:flex; gap:10px; margin-bottom:16px;">
+      <div style="flex:1; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px;">
+        <div class="muted-note" style="font-size:11px; text-transform:uppercase; letter-spacing:.05em;">Essa semana</div>
+        <div class="display" style="font-size:24px; margin-top:2px;">${weekTotals.totalMin} min</div>
+        ${zoneBreakdown(weekTotals)}
+      </div>
+      <div style="flex:1; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px;">
+        <div class="muted-note" style="font-size:11px; text-transform:uppercase; letter-spacing:.05em;">Esse mês</div>
+        <div class="display" style="font-size:24px; margin-top:2px;">${monthTotals.totalMin} min</div>
+        ${zoneBreakdown(monthTotals)}
+      </div>
+    </div>
+
+    <button class="cta" id="cardio-add" style="margin-bottom:16px;"><i class="ti ti-plus"></i> Registrar cardio</button>
+    <div id="cardio-form" class="hidden" style="display:flex; flex-direction:column; gap:8px; background:var(--panelAlt); border:1px solid var(--line); border-radius:10px; padding:12px; margin-bottom:16px;">
+      <div style="display:flex; gap:8px; align-items:center;">
+        <input id="cardio-minutes" type="number" min="1" placeholder="minutos" style="width:90px; background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:8px; color:var(--chalk); text-align:center;" />
+        <select id="cardio-zone" style="flex:1; background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:8px; color:var(--chalk);">
+          <option value="">Zona (opcional)</option>
+          ${CARDIO_ZONES.map((z) => `<option value="${z.key}">${z.label}</option>`).join("")}
+        </select>
+      </div>
+      <textarea id="cardio-note" rows="2" placeholder="observações (opcional)" style="background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:8px; color:var(--chalk); resize:none;"></textarea>
+      <div id="cardio-error" class="error" style="font-size:12px;"></div>
+      <div style="display:flex; justify-content:flex-end; gap:8px;">
+        <button id="cardio-cancel" style="color:var(--muted); font-size:13px;">cancelar</button>
+        <button id="cardio-save" style="color:var(--plate); font-size:13px;">salvar</button>
+      </div>
+    </div>
+
+    <div class="muted-note" style="font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; margin-bottom:8px;">Histórico</div>
+    ${
+      entries.length === 0
+        ? `<p class="muted-note">Nenhum cardio registrado ainda.</p>`
+        : entries
+            .map((e) => {
+              const zi = e.zone ? zoneInfo(e.zone) : null;
+              return `
+              <div style="display:flex; align-items:center; gap:10px; padding:8px 0; border-top:1px solid var(--line);">
+                <i class="ti ti-clock" style="color:var(--muted); font-size:16px;"></i>
+                <div style="flex:1;">
+                  <div style="font-size:13px; color:var(--chalk);">${e.minutes} min${e.note ? " · " + escapeHTML(e.note) : ""}</div>
+                  <div style="font-size:11px; color:var(--muted);">${weekLabel(e.dateKey)}</div>
+                </div>
+                ${zi ? `<span style="font-size:10px; color:${zi.color}; border:1px solid var(--line); border-radius:12px; padding:2px 8px;">${zi.key}</span>` : ""}
+                ${editable ? `<button data-rmcardio="${e.id}" class="rm-x"><i class="ti ti-x"></i></button>` : ""}
+              </div>`;
+            })
+            .join("")
+    }`;
+}
+
+function wireCardio(client, editable) {
+  const backBtn = el("cardio-back");
+  if (backBtn) backBtn.onclick = () => { ui.cardioOpen = false; render(); };
+
+  const addBtn = el("cardio-add");
+  const form = el("cardio-form");
+  if (addBtn) addBtn.onclick = () => form.classList.toggle("hidden");
+
+  const cancelBtn = el("cardio-cancel");
+  if (cancelBtn) cancelBtn.onclick = () => form.classList.add("hidden");
+
+  const saveBtn = el("cardio-save");
+  if (saveBtn) {
+    saveBtn.onclick = () => {
+      const minutes = parseInt(el("cardio-minutes").value, 10);
+      const zone = el("cardio-zone").value;
+      const note = el("cardio-note").value.trim();
+      const errorEl = el("cardio-error");
+      errorEl.textContent = "";
+      if (!minutes || minutes <= 0) {
+        errorEl.textContent = "Informe quantos minutos.";
+        return;
+      }
+      const entry = { id: uid(), dateKey: todayKey(), minutes, zone, note };
+      const next = [...(client.cardio || []), entry];
+      saveClient(client.id, { cardio: next });
+      form.classList.add("hidden");
+    };
+  }
+
+  document.querySelectorAll("[data-rmcardio]").forEach((btn) => {
+    btn.onclick = () => {
+      if (!confirm("Remover esse registro de cardio?")) return;
+      const next = (client.cardio || []).filter((e) => e.id !== btn.dataset.rmcardio);
+      saveClient(client.id, { cardio: next });
+    };
+  });
+}
+
 
 function planEditHTML(client, editable) {
   const plan = (client.weekPlans || []).find((p) => p.weekKey === ui.planWeekKey);
