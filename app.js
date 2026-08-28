@@ -753,6 +753,32 @@ const MUSCLE_GROUPS = [
 ];
 
 // tenta adivinhar o grupo muscular pelo nome do exercício (o treinador pode corrigir depois)
+// desenhos simples (SVG, brancos) pra cada tipo de treino, escolhidos
+// automaticamente pelo nome do dia (ex.: "Lower" ou "Legs" -> desenho de perna)
+const DAY_ICONS = {
+  leg: `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h4l.5 7 2 9h-3l-1.5-7-2 7H6l1.5-9L9 3z"/></svg>`,
+  chest: `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6c-1.5-2-5-2-6 .5-1 2.5 0 8 2 11 1.5-1 3-2.5 4-4.5 1 2 2.5 3.5 4 4.5 2-3 3-8.5 2-11-1-2.5-4.5-2.5-6-.5z"/></svg>`,
+  back: `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 4v3c-2 0-3 1-3 3s1 4 3 6l-2 2c-2-1-3.5-3-5-3s-3 2-5 3l-2-2c2-2 3-4 3-6s-1-3-3-3V7l7-4z"/></svg>`,
+  shoulder: `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="3"/><path d="M4 20c0-4 3-7 8-7s8 3 8 7"/></svg>`,
+  arm: `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19l3-8c.5-2 2-3 4-3 3 0 5 2 5 5 0 1.5-.5 2.5-1.5 3.2"/><circle cx="9" cy="9" r="2.3"/></svg>`,
+  core: `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="4" width="10" height="16" rx="3"/><line x1="7" y1="9" x2="17" y2="9"/><line x1="7" y1="14" x2="17" y2="14"/><line x1="12" y1="4" x2="12" y2="20"/></svg>`,
+  fullbody: `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="4" r="2"/><path d="M12 6v7M8 9l4-2 4 2M8 21l4-8 4 8"/></svg>`,
+  cardio: `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2-7 3 14 2-9 1.5 2H21"/></svg>`,
+};
+
+function dayIcon(title) {
+  const t = (title || "").toLowerCase();
+  if (/\b(perna|leg|lower|quadr[íi]ceps|posterior|gl[úu]teo)/.test(t)) return DAY_ICONS.leg;
+  if (/\b(peito|push|chest|supino|peitoral)/.test(t)) return DAY_ICONS.chest;
+  if (/\b(costas|pull|back|dorsal|puxada|remada)/.test(t)) return DAY_ICONS.back;
+  if (/\b(ombro|shoulder|delt[óo]ide)/.test(t)) return DAY_ICONS.shoulder;
+  if (/\b(bra[çc]o|biceps|b[íi]ceps|triceps|tr[íi]ceps|arm|upper)/.test(t)) return DAY_ICONS.arm;
+  if (/\b(abdomen|abd[ôo]men|core|abs)/.test(t)) return DAY_ICONS.core;
+  if (/\b(cardio|corrida|esteira|bike)/.test(t)) return DAY_ICONS.cardio;
+  if (/\b(full\s?body|corpo todo)/.test(t)) return DAY_ICONS.fullbody;
+  return `<i class="ti ti-barbell" style="font-size:18px;"></i>`;
+}
+
 function guessMuscle(name) {
   const n = (name || "").toLowerCase();
   const test = (...words) => words.some((w) => n.includes(w));
@@ -841,7 +867,7 @@ function clientAreaHTMLInner(client, editable) {
                   </div>`
                 : ""
             }
-            <div style="color:var(--red);"><i class="ti ti-barbell" style="font-size:18px;"></i></div>
+            <div style="color:var(--red);">${dayIcon(d.title)}</div>
             <div>
               <div class="title display">${escapeHTML(d.title || "Sem título")}</div>
               <div class="count">${(d.exercises || []).length} exercício${(d.exercises || []).length !== 1 ? "s" : ""}</div>
@@ -857,6 +883,7 @@ function clientAreaHTMLInner(client, editable) {
   return `
     <div class="day-head">
       <button class="back" id="back-to-grid"><i class="ti ti-chevron-left"></i> Semana</button>
+      <span style="color:var(--red); flex-shrink:0; display:flex; align-items:center;">${dayIcon(day.title)}</span>
       ${
         editable
           ? `<input class="display day-title" id="day-title-input" value="${attr(day.title)}" />`
