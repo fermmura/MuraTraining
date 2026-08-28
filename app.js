@@ -333,9 +333,11 @@ function render() {
   if (ui.view === "student") {
     appEl.innerHTML = studentHTML();
     el("btn-logout").onclick = doLogout;
-    if (myClient && !ui.studentEnteredTreinos) {
+    if (myClient && !ui.studentEnteredTreinos && !ui.cardioOpen) {
       const enterBtn = el("enter-treinos");
       if (enterBtn) enterBtn.onclick = () => { ui.studentEnteredTreinos = true; render(); };
+      const cardioBtn = el("enter-cardio");
+      if (cardioBtn) cardioBtn.onclick = () => { ui.cardioOpen = true; render(); };
     } else {
       wireClientArea(myClient, false);
     }
@@ -706,15 +708,18 @@ function wireTrainer() {
 // ---------------- ALUNO ----------------
 
 function studentHTML() {
-  if (myClient && !ui.studentEnteredTreinos) {
+  if (myClient && !ui.studentEnteredTreinos && !ui.cardioOpen) {
     return `
       ${topbarHTML(myClient.name, "modo aluno")}
       <div class="main solo" style="display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:340px; gap:6px; text-align:center;">
         <i class="ti ti-barbell" style="color:var(--red); font-size:34px;"></i>
         <div class="display" style="font-size:22px; margin-top:6px;">Olá, ${escapeHTML(myClient.name.split(" ")[0])}</div>
         <div class="muted-note" style="margin-bottom:22px;">Bora treinar hoje?</div>
-        <button id="enter-treinos" class="cta" style="width:220px; display:flex; align-items:center; justify-content:center; gap:8px;">
+        <button id="enter-treinos" class="cta" style="width:220px; display:flex; align-items:center; justify-content:center; gap:8px; margin-bottom:10px;">
           <i class="ti ti-list-check"></i> Treinos
+        </button>
+        <button id="enter-cardio" class="dashed-btn" style="width:220px; display:flex; align-items:center; justify-content:center; gap:8px;">
+          <i class="ti ti-heart-rate-monitor"></i> Cardio
         </button>
       </div>`;
   }
@@ -2120,7 +2125,7 @@ function cardioHTML(client, editable) {
                   <div style="font-size:11px; color:var(--muted);">${weekLabel(e.dateKey)}</div>
                 </div>
                 ${zi ? `<span style="font-size:10px; color:${zi.color}; border:1px solid var(--line); border-radius:12px; padding:2px 8px;">${zi.key}</span>` : ""}
-                ${editable ? `<button data-rmcardio="${e.id}" class="rm-x"><i class="ti ti-x"></i></button>` : ""}
+                <button data-rmcardio="${e.id}" class="rm-x"><i class="ti ti-x"></i></button>
               </div>`;
             })
             .join("")
