@@ -60,7 +60,7 @@ let clients = []; // só preenchido para o treinador
 let myClient = null; // só preenchido para o aluno
 let unsubscribe = null;
 
-let ui = { view: "loading", selectedId: null, activeDayId: null, progOpen: false, progMode: "table", progKey: null, studentEnteredTreinos: false, calendarOpen: false, planWeekKey: null, themeOpen: false, cardioOpen: false };
+let ui = { view: "loading", selectedId: null, activeDayId: null, progOpen: false, progMode: "table", progKey: null, studentEnteredTreinos: false, calendarOpen: false, planWeekKey: null, themeOpen: false, cardioOpen: false, feedbackOpen: false };
 let draggedDayId = null;
 let collapsedEx = {}; // exercícios minimizados; por padrão, todo exercício começa minimizado
 const isCollapsed = (exId) => collapsedEx[exId] !== false;
@@ -333,11 +333,15 @@ function render() {
   if (ui.view === "student") {
     appEl.innerHTML = studentHTML();
     el("btn-logout").onclick = doLogout;
-    if (myClient && !ui.studentEnteredTreinos && !ui.cardioOpen) {
+    if (myClient && !ui.studentEnteredTreinos && !ui.cardioOpen && !ui.progOpen && !ui.feedbackOpen) {
       const enterBtn = el("enter-treinos");
       if (enterBtn) enterBtn.onclick = () => { ui.studentEnteredTreinos = true; render(); };
       const cardioBtn = el("enter-cardio");
       if (cardioBtn) cardioBtn.onclick = () => { ui.cardioOpen = true; render(); };
+      const evolBtn = el("enter-evolucao");
+      if (evolBtn) evolBtn.onclick = () => { ui.progOpen = true; render(); };
+      const feedbackBtn = el("enter-feedback");
+      if (feedbackBtn) feedbackBtn.onclick = () => { ui.feedbackOpen = true; render(); };
     } else {
       wireClientArea(myClient, false);
     }
@@ -730,18 +734,34 @@ function wireTrainer() {
 // ---------------- ALUNO ----------------
 
 function studentHTML() {
-  if (myClient && !ui.studentEnteredTreinos && !ui.cardioOpen) {
+  if (myClient && !ui.studentEnteredTreinos && !ui.cardioOpen && !ui.progOpen && !ui.feedbackOpen) {
     return `
       ${topbarHTML(myClient.name, "modo aluno")}
-      <div class="main solo" style="display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:340px; gap:6px; text-align:center;">
-        <i class="ti ti-barbell" style="color:var(--red); font-size:34px;"></i>
-        <div class="display" style="font-size:22px; margin-top:6px;">Olá, ${escapeHTML(myClient.name.split(" ")[0])}</div>
-        <div class="muted-note" style="margin-bottom:22px;">Bora treinar hoje?</div>
-        <button id="enter-treinos" class="cta" style="width:220px; display:flex; align-items:center; justify-content:center; gap:8px; margin-bottom:10px;">
-          <i class="ti ti-list-check"></i> Treinos
+      <div class="main solo home-screen">
+        <div class="home-greet">
+          <div class="display" style="font-size:22px;">Olá, "${escapeHTML(myClient.name.split(" ")[0])}"</div>
+          <div class="muted-note">como você está hoje?</div>
+        </div>
+
+        <button id="enter-treinos" class="home-btn home-btn-lg home-glow-red">
+          <i class="ti ti-barbell"></i>
+          <span class="display">Musculação</span>
         </button>
-        <button id="enter-cardio" class="dashed-btn" style="width:220px; display:flex; align-items:center; justify-content:center; gap:8px;">
-          <i class="ti ti-heart-rate-monitor"></i> Cardio
+
+        <div class="home-row">
+          <button id="enter-cardio" class="home-btn home-glow-blue">
+            <i class="ti ti-heart-rate-monitor"></i>
+            <span class="display">Cardio</span>
+          </button>
+          <button id="enter-evolucao" class="home-btn home-glow-gold">
+            <i class="ti ti-chart-line"></i>
+            <span class="display">Evolução</span>
+          </button>
+        </div>
+
+        <button id="enter-feedback" class="home-btn home-glow-muted">
+          <i class="ti ti-message-circle"></i>
+          <span class="display">Feedbacks / Observações</span>
         </button>
       </div>`;
   }
@@ -836,10 +856,11 @@ function muscleVolume(day) {
 }
 
 function clientAreaHTML(client, editable) {
-  if (editable && ui.progOpen) return progressionHTML(client);
+  if (ui.progOpen) return progressionHTML(client);
   if (ui.calendarOpen) return calendarHTML(client, editable);
   if (ui.planWeekKey) return planEditHTML(client, editable);
   if (ui.cardioOpen) return cardioHTML(client, editable);
+  if (ui.feedbackOpen) return feedbackHTML(client, editable);
   return clientAreaHTMLInner(client, editable);
 }
 
@@ -867,9 +888,10 @@ function clientAreaHTMLInner(client, editable) {
       }
       ${
         !client.__planId
-          ? `<div style="display:flex; gap:8px; margin-bottom:12px;">
+          ? `<div style="display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap;">
               <button class="dashed-btn" id="open-calendar"><i class="ti ti-calendar-stats"></i> Calendário</button>
               <button class="dashed-btn" id="open-cardio"><i class="ti ti-heart-rate-monitor"></i> Cardio</button>
+              <button class="dashed-btn" id="open-feedback"><i class="ti ti-message-circle"></i> Feedbacks</button>
             </div>`
           : ""
       }
@@ -1049,7 +1071,7 @@ function setRowHTML(exId, s, i, editable) {
 function wireClientArea(client, editable) {
   if (!client) return;
 
-  if (editable && ui.progOpen) {
+  if (ui.progOpen) {
     wireProgression(client);
     return;
   }
@@ -1063,6 +1085,10 @@ function wireClientArea(client, editable) {
   }
   if (ui.cardioOpen) {
     wireCardio(client, editable);
+    return;
+  }
+  if (ui.feedbackOpen) {
+    wireFeedback(client, editable);
     return;
   }
 
@@ -1095,6 +1121,14 @@ function wireClientAreaInner(client, editable) {
   if (openCardioBtn) {
     openCardioBtn.onclick = () => {
       ui.cardioOpen = true;
+      render();
+    };
+  }
+
+  const openFeedbackBtn = document.getElementById("open-feedback");
+  if (openFeedbackBtn) {
+    openFeedbackBtn.onclick = () => {
+      ui.feedbackOpen = true;
       render();
     };
   }
@@ -2220,6 +2254,73 @@ function wireCardio(client, editable) {
   });
 }
 
+// ---------- feedbacks / observações ----------
+
+const WHATSAPP_NUMBER = "5519993150750"; // 55 (Brasil) + 19 (DDD) + número, sem espaços/traços
+
+function feedbackHTML(client, editable) {
+  const entries = [...(client.feedback || [])].sort((a, b) => a.dateKey.localeCompare(b.dateKey));
+  const who = editable ? "treinador" : "aluno";
+
+  return `
+    <div class="day-head">
+      <button class="back" id="feedback-back"><i class="ti ti-chevron-left"></i> ${editable ? "Aluno" : "Início"}</button>
+      <div class="display day-title" style="font-size:18px;">Feedbacks / Observações</div>
+    </div>
+
+    <a href="https://wa.me/${WHATSAPP_NUMBER}" target="_blank" rel="noopener" class="cta" style="display:flex; align-items:center; justify-content:center; gap:8px; margin-bottom:16px; text-decoration:none;">
+      <i class="ti ti-brand-whatsapp"></i> Falar direto no WhatsApp
+    </a>
+
+    <div style="display:flex; flex-direction:column; gap:10px; margin-bottom:16px;">
+      ${
+        entries.length === 0
+          ? `<p class="muted-note">Nenhuma mensagem ainda. Escreva o que quiser pro ${editable ? "aluno" : "seu personal"} aqui embaixo.</p>`
+          : entries
+              .map((m) => {
+                const mine = m.from === who;
+                return `
+                <div style="align-self:${mine ? "flex-end" : "flex-start"}; max-width:85%; background:${mine ? "var(--redDim)" : "var(--panel)"}; border:1px solid ${mine ? "var(--red)" : "var(--line)"}; border-radius:12px; padding:8px 12px;">
+                  <div style="font-size:10px; color:var(--muted); margin-bottom:2px; text-transform:uppercase; letter-spacing:.03em;">${m.from === "aluno" ? "Aluno" : "Personal"} · ${weekLabel(m.dateKey)}</div>
+                  <div style="font-size:13px; color:var(--chalk); white-space:pre-wrap;">${escapeHTML(m.text)}</div>
+                  ${editable ? `<button data-rmfeedback="${m.id}" class="rm-x" style="margin-top:4px;"><i class="ti ti-trash" style="font-size:12px;"></i></button>` : ""}
+                </div>`;
+              })
+              .join("")
+      }
+    </div>
+
+    <textarea id="feedback-text" rows="3" placeholder="Escreva à vontade…" style="width:100%; background:var(--panelAlt); border:1px solid var(--line); border-radius:8px; padding:10px; color:var(--chalk); resize:none; margin-bottom:8px;"></textarea>
+    <button id="feedback-send" class="dashed-btn" style="width:100%; justify-content:center;"><i class="ti ti-send"></i> Enviar</button>
+  `;
+}
+
+function wireFeedback(client, editable) {
+  const backBtn = el("feedback-back");
+  if (backBtn) backBtn.onclick = () => { ui.feedbackOpen = false; render(); };
+
+  const who = editable ? "treinador" : "aluno";
+  const sendBtn = el("feedback-send");
+  if (sendBtn) {
+    sendBtn.onclick = () => {
+      const textEl = el("feedback-text");
+      const text = textEl.value.trim();
+      if (!text) return;
+      const entry = { id: uid(), dateKey: todayKey(), from: who, text };
+      const next = [...(client.feedback || []), entry];
+      saveClient(client.id, { feedback: next });
+      textEl.value = "";
+    };
+  }
+
+  document.querySelectorAll("[data-rmfeedback]").forEach((btn) => {
+    btn.onclick = () => {
+      if (!confirm("Remover essa mensagem?")) return;
+      const next = (client.feedback || []).filter((m) => m.id !== btn.dataset.rmfeedback);
+      saveClient(client.id, { feedback: next });
+    };
+  });
+}
 
 function planEditHTML(client, editable) {
   const plan = (client.weekPlans || []).find((p) => p.weekKey === ui.planWeekKey);

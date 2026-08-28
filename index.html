@@ -77,6 +77,27 @@
   .sq[draggable="true"] { cursor: grab; }
   .cal-row:active { opacity: .8; }
 
+  /* tela inicial do aluno — estilo neon */
+  .home-screen { display: flex; flex-direction: column; gap: 12px; padding-top: 30px; max-width: 320px; margin: 0 auto; }
+  .home-greet { text-align: center; margin-bottom: 8px; }
+  .home-btn { border: none; border-radius: 16px; background: #1A1820; display: flex; align-items: center; justify-content: center;
+    gap: 10px; padding: 18px; cursor: pointer; }
+  .home-btn .display { font-size: 16px; }
+  .home-btn i { font-size: 20px; }
+  .home-btn-lg { padding: 26px 18px; }
+  .home-btn-lg .display { font-size: 20px; }
+  .home-btn-lg i { font-size: 26px; }
+  .home-row { display: flex; gap: 10px; }
+  .home-row .home-btn { flex: 1; flex-direction: column; padding: 16px 10px; }
+  .home-glow-red { border: 1.5px solid var(--red); box-shadow: 0 0 16px rgba(255,68,51,.5), inset 0 0 20px rgba(255,68,51,.06); }
+  .home-glow-red i, .home-glow-red .display { color: #FF6B5C; text-shadow: 0 0 12px rgba(255,68,51,.6); }
+  .home-glow-blue { border: 1.5px solid var(--steel); box-shadow: 0 0 14px rgba(76,134,180,.45); }
+  .home-glow-blue i, .home-glow-blue .display { color: #7CB6E8; text-shadow: 0 0 10px rgba(76,134,180,.6); }
+  .home-glow-gold { border: 1.5px solid var(--plate); box-shadow: 0 0 14px rgba(232,185,74,.45); }
+  .home-glow-gold i, .home-glow-gold .display { color: #F5CE7A; text-shadow: 0 0 10px rgba(232,185,74,.6); }
+  .home-glow-muted { border: 1.5px solid var(--line); }
+  .home-glow-muted i, .home-glow-muted .display { color: #C9C5CE; }
+
   /* personalização de tema */
   .theme-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); }
   .theme-row label { font-size: 13px; color: var(--chalk); }
