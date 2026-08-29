@@ -2337,8 +2337,9 @@ function planEditHTML(client, editable) {
     </div>
     ${
       editable
-        ? `<div style="display:flex; gap:8px; margin-bottom:12px;">
+        ? `<div style="display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap;">
             <button class="dashed-btn" id="plan-activate"><i class="ti ti-check"></i> Ativar essa semana agora</button>
+            <button class="dashed-btn" id="plan-refresh"><i class="ti ti-refresh"></i> Atualizar "feito" com o treino atual</button>
             <button class="dashed-btn" id="plan-delete"><i class="ti ti-trash"></i> Apagar plano</button>
           </div>`
         : ""
@@ -2363,6 +2364,36 @@ function wirePlanEdit(client, editable) {
       await saveClient(client.id, { days: plan.days, activeWeekKey: plan.weekKey, weekPlans: nextPlans });
       ui.planWeekKey = null;
       ui.calendarOpen = false;
+    };
+  }
+  const refreshBtn = el("plan-refresh");
+  if (refreshBtn) {
+    refreshBtn.onclick = async () => {
+      // busca o "feito" pela posição (mesmo dia, mesmo exercício, mesma série)
+      // no treino ATUAL do aluno, e traz pra dentro do plano
+      const currentDays = client.days || [];
+      const updatedDays = plan.days.map((d, di) => {
+        const curDay = currentDays[di];
+        if (!curDay) return d;
+        return {
+          ...d,
+          exercises: (d.exercises || []).map((ex, ei) => {
+            const curEx = curDay.exercises && curDay.exercises[ei];
+            if (!curEx) return ex;
+            return {
+              ...ex,
+              sets: (ex.sets || []).map((s, si) => {
+                const curSet = curEx.sets && curEx.sets[si];
+                return curSet ? { ...s, repsDone: curSet.repsDone } : s;
+              }),
+            };
+          }),
+        };
+      });
+      const nextPlans = (client.weekPlans || []).map((p) => (p.id === plan.id ? { ...p, days: updatedDays } : p));
+      await saveClient(client.id, { weekPlans: nextPlans });
+      refreshBtn.textContent = "Atualizado!";
+      setTimeout(() => { refreshBtn.innerHTML = `<i class="ti ti-refresh"></i> Atualizar "feito" com o treino atual`; }, 1500);
     };
   }
   const deleteBtn = el("plan-delete");
