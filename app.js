@@ -870,29 +870,28 @@ function clientAreaHTMLInner(client, editable) {
   if (!day) {
     return `
       ${
-        editable && !client.__planId
-          ? `<div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
-               <button class="dashed-btn" id="open-import-modal"><i class="ti ti-clipboard-text"></i> Importar treino (colar texto)</button>
-               <button class="dashed-btn" id="open-progression"><i class="ti ti-chart-line"></i> Progressão</button>
-               <button class="dashed-btn" id="open-duplicate"><i class="ti ti-copy"></i> Duplicar treinos p/ outro aluno</button>
-             </div>`
-          : ""
-      }
-      ${
-        editable && !client.__planId
-          ? `<div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
-               <button class="dashed-btn" id="rir-unlock-all" style="color:var(--plate);border-color:var(--plate);"><i class="ti ti-lock-open"></i> Liberar RIR de tudo p/ ${escapeHTML(client.name.split(" ")[0])}</button>
-               <button class="dashed-btn" id="rir-lock-all"><i class="ti ti-lock"></i> Travar RIR de tudo</button>
-             </div>`
-          : ""
-      }
-      ${
         !client.__planId
-          ? `<div style="display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap;">
+          ? `<div class="toolbar-nav">
               <button class="dashed-btn" id="open-calendar"><i class="ti ti-calendar-stats"></i> Calendário</button>
               <button class="dashed-btn" id="open-cardio"><i class="ti ti-heart-rate-monitor"></i> Cardio</button>
+              <button class="dashed-btn" id="open-progression"><i class="ti ti-chart-line"></i> Progressão</button>
               <button class="dashed-btn" id="open-feedback"><i class="ti ti-message-circle"></i> Feedbacks</button>
             </div>`
+          : ""
+      }
+      ${
+        editable && !client.__planId
+          ? `<button class="dashed-btn" id="toggle-more-actions" style="margin-bottom:8px;color:var(--muted);">
+               <i class="ti ti-dots"></i> Mais ações
+             </button>
+             <div id="more-actions" class="hidden" style="display:flex; flex-direction:column; gap:8px; margin-bottom:12px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px;">
+               <button class="dashed-btn" id="open-import-modal"><i class="ti ti-clipboard-text"></i> Importar treino (colar texto)</button>
+               <button class="dashed-btn" id="open-duplicate"><i class="ti ti-copy"></i> Duplicar treinos p/ outro aluno</button>
+               <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                 <button class="dashed-btn" id="rir-unlock-all" style="flex:1;color:var(--plate);border-color:var(--plate);"><i class="ti ti-lock-open"></i> Liberar RIR de tudo p/ ${escapeHTML(client.name.split(" ")[0])}</button>
+                 <button class="dashed-btn" id="rir-lock-all" style="flex:1;"><i class="ti ti-lock"></i> Travar RIR de tudo</button>
+               </div>
+             </div>`
           : ""
       }
       <div class="grid ${editable ? "" : "stacked"}">
@@ -1122,6 +1121,13 @@ function wireClientAreaInner(client, editable) {
     openCardioBtn.onclick = () => {
       ui.cardioOpen = true;
       render();
+    };
+  }
+
+  const toggleMoreBtn = document.getElementById("toggle-more-actions");
+  if (toggleMoreBtn) {
+    toggleMoreBtn.onclick = () => {
+      document.getElementById("more-actions").classList.toggle("hidden");
     };
   }
 
