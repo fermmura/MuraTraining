@@ -1,4 +1,4 @@
-const CACHE = "meu-treino-v51";
+const CACHE = "meu-treino-v52";
 const CORE_FILES = [
   "./index.html",
   "./app.js",

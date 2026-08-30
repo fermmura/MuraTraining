@@ -60,7 +60,7 @@ let clients = []; // só preenchido para o treinador
 let myClient = null; // só preenchido para o aluno
 let unsubscribe = null;
 
-let ui = { view: "loading", selectedId: null, activeDayId: null, progOpen: false, progMode: "table", progKey: null, studentEnteredTreinos: false, calendarOpen: false, planWeekKey: null, themeOpen: false, cardioOpen: false, feedbackOpen: false, muscleOpen: false };
+let ui = { view: "loading", selectedId: null, activeDayId: null, progOpen: false, progMode: "table", progKey: null, studentEnteredTreinos: false, calendarOpen: false, planWeekKey: null, themeOpen: false, cardioOpen: false, feedbackOpen: false, muscleOpen: false, pastWeekKey: null };
 let draggedDayId = null;
 let collapsedEx = {}; // exercícios minimizados; por padrão, todo exercício começa minimizado
 const isCollapsed = (exId) => collapsedEx[exId] !== false;
@@ -900,6 +900,7 @@ function clientAreaHTML(client, editable) {
   if (ui.cardioOpen) return cardioHTML(client, editable);
   if (ui.feedbackOpen) return feedbackHTML(client, editable);
   if (ui.muscleOpen) return muscleVolumeHTML(client, editable);
+  if (ui.pastWeekKey) return pastWeekHTML(client, editable);
   return clientAreaHTMLInner(client, editable);
 }
 
@@ -1139,6 +1140,10 @@ function wireClientArea(client, editable) {
   }
   if (ui.muscleOpen) {
     wireMuscleVolume(client, editable);
+    return;
+  }
+  if (ui.pastWeekKey) {
+    wirePastWeek(client, editable);
     return;
   }
 
@@ -2100,6 +2105,24 @@ function pastWeekSummary(client, weekKey) {
   return Object.values(byEx);
 }
 
+// agrupa o histórico de uma semana por DIA de treino (Treino A, B...) e,
+// dentro de cada dia, por exercício — pra reconstruir uma visão de leitura
+// de como ficou aquela semana
+function pastWeekByDay(client, weekKey) {
+  const entries = (client.history || []).filter((h) => h.weekKey === weekKey);
+  const byDay = {};
+  for (const h of entries) {
+    const dayKey = h.dayId || h.dayTitle || "sem-dia";
+    if (!byDay[dayKey]) byDay[dayKey] = { title: h.dayTitle || "Treino", byEx: {} };
+    if (!byDay[dayKey].byEx[h.exId]) byDay[dayKey].byEx[h.exId] = { name: h.exName, sets: [] };
+    byDay[dayKey].byEx[h.exId].sets.push(h);
+  }
+  return Object.values(byDay).map((d) => ({
+    title: d.title,
+    exercises: Object.values(d.byEx).map((ex) => ({ ...ex, sets: ex.sets.sort((a, b) => a.setIndex - b.setIndex) })),
+  }));
+}
+
 function calendarHTML(client, editable) {
   const activeKey = client.activeWeekKey || weekKeyOf(todayKey());
   const plans = client.weekPlans || [];
@@ -2168,7 +2191,12 @@ function wireCalendar(client, editable) {
       const off = parseInt(row.dataset.caloff, 10);
       const activeKey = client.activeWeekKey || weekKeyOf(todayKey());
 
-      if (off < 0) return; // semanas passadas: só o resumo já mostrado no card, sem tela própria por ora
+      if (off < 0) {
+        ui.calendarOpen = false;
+        ui.pastWeekKey = wk;
+        render();
+        return;
+      }
       if (off === 0) {
         ui.calendarOpen = false; // semana atual: volta pra grade normal de treinos
         render();
@@ -2442,6 +2470,55 @@ function muscleVolumeHTML(client, editable) {
 function wireMuscleVolume(client, editable) {
   const backBtn = el("muscle-back");
   if (backBtn) backBtn.onclick = () => { ui.muscleOpen = false; render(); };
+}
+
+// ---------- visualização (só leitura) de uma semana já passada ----------
+
+function pastWeekHTML(client, editable) {
+  const days = pastWeekByDay(client, ui.pastWeekKey);
+  return `
+    <div class="day-head">
+      <button class="back" id="pastweek-back"><i class="ti ti-chevron-left"></i> Calendário</button>
+      <div class="display day-title" style="font-size:18px;">${weekRangeLabel(ui.pastWeekKey)}</div>
+    </div>
+    <p class="muted-note" style="margin-bottom:16px;"><i class="ti ti-lock"></i> Só leitura — mostra o que ficou registrado naquela semana.</p>
+    ${
+      days.length === 0
+        ? `<p class="muted-note">Nenhum registro encontrado pra essa semana.</p>`
+        : days
+            .map(
+              (d) => `
+            <div style="margin-bottom:20px;">
+              <div class="display" style="font-size:15px; margin-bottom:8px; color:var(--chalk);">${escapeHTML(d.title)}</div>
+              ${d.exercises
+                .map(
+                  (ex) => `
+                <div style="background:var(--bg); border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin-bottom:8px;">
+                  <div style="font-size:13px; font-weight:600; color:var(--chalk); margin-bottom:6px;">${escapeHTML(ex.name)}</div>
+                  ${ex.sets
+                    .map(
+                      (s, i) => `
+                    <div style="display:flex; gap:10px; font-size:12px; color:var(--muted); padding:3px 0;">
+                      <span style="width:20px;">${i + 1}ª</span>
+                      <span style="color:var(--plate);">meta ${escapeHTML(s.repsGoal || "-")}</span>
+                      <span style="color:var(--chalk);">feito ${escapeHTML(s.repsDone || "-")}</span>
+                      <span style="color:var(--steel);">${escapeHTML(s.load || "-")}kg</span>
+                    </div>`
+                    )
+                    .join("")}
+                </div>`
+                )
+                .join("")}
+            </div>`
+            )
+            .join("")
+    }
+  `;
+}
+
+function wirePastWeek(client, editable) {
+  const backBtn = el("pastweek-back");
+  if (backBtn) backBtn.onclick = () => { ui.pastWeekKey = null; ui.calendarOpen = true; render(); };
 }
 
 function planEditHTML(client, editable) {
