@@ -841,15 +841,40 @@ function guessMuscle(name) {
   return "";
 }
 
+// exercícios compostos recrutam um segundo músculo como sinergista — a
+// evidência mais recente (Pelland et al., 2025, Sports Medicine) mostra que
+// contar essa série sinergista como "meia série" (0.5) é o método que melhor
+// prevê o ganho de hipertrofia, comparado a contar cheia ou ignorar
+function guessSynergist(name) {
+  const n = (name || "").toLowerCase();
+  const test = (...words) => words.some((w) => n.includes(w));
+  if (test("supino", "crucifixo", "cross over", "crossover", "voador") && !test("máquina peito isolad")) return "Tríceps";
+  if (test("puxada", "remada", "pulldown", "barra fixa", "pull-up", "pulley costas")) return "Bíceps";
+  if (test("desenvolvimento", "arnold")) return "Tríceps";
+  if (test("levantamento terra", "terra convencional", "stiff", "hip thrust", "elevação pélvica", "elevacao pelvica")) return "Posterior de coxa";
+  if (test("agachamento", "leg press", "hack", "avanço", "avanco", "afundo")) return "Glúteo";
+  return "";
+}
+
+
+function fmtVol(n) {
+  const rounded = Math.round(n * 10) / 10;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+}
+
+function addMuscleCount(byMuscle, muscle, weight, done) {
+  if (!muscle) return;
+  if (!byMuscle[muscle]) byMuscle[muscle] = { done: 0, total: 0 };
+  byMuscle[muscle].total += weight;
+  if (done) byMuscle[muscle].done += weight;
+}
+
 function muscleVolume(day) {
   const byMuscle = {};
   for (const ex of day.exercises || []) {
-    const muscle = ex.muscle || "";
-    if (!muscle) continue;
-    if (!byMuscle[muscle]) byMuscle[muscle] = { done: 0, total: 0 };
     for (const s of ex.sets || []) {
-      byMuscle[muscle].total++;
-      if (s.repsDone) byMuscle[muscle].done++;
+      addMuscleCount(byMuscle, ex.muscle, 1, !!s.repsDone);
+      addMuscleCount(byMuscle, ex.synergist, 0.5, !!s.repsDone);
     }
   }
   return Object.entries(byMuscle).sort((a, b) => b[1].total - a[1].total);
@@ -859,12 +884,9 @@ function clientMuscleVolume(client) {
   const byMuscle = {};
   for (const day of client.days || []) {
     for (const ex of day.exercises || []) {
-      const muscle = ex.muscle || "";
-      if (!muscle) continue;
-      if (!byMuscle[muscle]) byMuscle[muscle] = { done: 0, total: 0 };
       for (const s of ex.sets || []) {
-        byMuscle[muscle].total++;
-        if (s.repsDone) byMuscle[muscle].done++;
+        addMuscleCount(byMuscle, ex.muscle, 1, !!s.repsDone);
+        addMuscleCount(byMuscle, ex.synergist, 0.5, !!s.repsDone);
       }
     }
   }
@@ -964,7 +986,7 @@ function clientAreaHTMLInner(client, editable) {
                 ${byMuscle
                   .map(
                     ([m, v]) =>
-                      `<span class="muscle-vol-pill">${escapeHTML(m)}: <b>${v.done}/${v.total}</b></span>`
+                      `<span class="muscle-vol-pill">${escapeHTML(m)}: <b>${fmtVol(v.done)}/${fmtVol(v.total)}</b></span>`
                   )
                   .join("")}
               </div>`
@@ -1002,13 +1024,20 @@ function exerciseHTML(ex, editable, index, total) {
       </div>
       ${
         editable
-          ? `<select class="muscle-select" data-field="muscle">
-              <option value="">Grupo muscular…</option>
-              ${MUSCLE_GROUPS.map((m) => `<option value="${m}" ${ex.muscle === m ? "selected" : ""}>${m}</option>`).join("")}
-            </select>`
-          : ex.muscle
-          ? `<span class="muscle-tag">${escapeHTML(ex.muscle)}</span>`
-          : ""
+          ? `<div style="display:flex; gap:6px; flex-wrap:wrap;">
+              <select class="muscle-select" data-field="muscle">
+                <option value="">Músculo principal…</option>
+                ${MUSCLE_GROUPS.map((m) => `<option value="${m}" ${ex.muscle === m ? "selected" : ""}>${m}</option>`).join("")}
+              </select>
+              <select class="muscle-select" data-field="synergist" style="color:var(--muted);" title="Sinergista — conta como meia série pra esse músculo">
+                <option value="">+ sinergista (½ série)</option>
+                ${MUSCLE_GROUPS.map((m) => `<option value="${m}" ${ex.synergist === m ? "selected" : ""}>${m}</option>`).join("")}
+              </select>
+            </div>`
+          : `<div style="display:flex; gap:6px; flex-wrap:wrap;">
+              ${ex.muscle ? `<span class="muscle-tag">${escapeHTML(ex.muscle)}</span>` : ""}
+              ${ex.synergist ? `<span class="muscle-tag" style="opacity:.6;">+½ ${escapeHTML(ex.synergist)}</span>` : ""}
+            </div>`
       }
       <div class="ex-body ${collapsed ? "hidden" : ""}">
         <div class="notes-box">
@@ -1344,9 +1373,14 @@ function wireClientAreaInner(client, editable) {
               if (ex.id !== exId) return ex;
               const patch = { [field]: input.value };
               // se o nome mudou e o músculo ainda não foi escolhido, tenta adivinhar sozinho
+              // (músculo principal + sinergista, quando o exercício for composto)
               if (field === "name" && !ex.muscle) {
                 const guessed = guessMuscle(input.value);
                 if (guessed) patch.muscle = guessed;
+                if (!ex.synergist) {
+                  const guessedSynergist = guessSynergist(input.value);
+                  if (guessedSynergist) patch.synergist = guessedSynergist;
+                }
               }
               return { ...ex, ...patch };
             }),
@@ -1716,7 +1750,7 @@ function parseWorkoutText(text) {
 
     // qualquer outra linha = nome de um novo exercício
     const exName = line.replace(/:$/, "");
-    currentExercise = { id: uid(), name: exName, muscle: guessMuscle(exName), notes: "", sets: [], _notesArr: [] };
+    currentExercise = { id: uid(), name: exName, muscle: guessMuscle(exName), synergist: guessSynergist(exName), notes: "", sets: [], _notesArr: [] };
     currentDay.exercises.push(currentExercise);
   }
 
@@ -2378,7 +2412,7 @@ function muscleVolumeHTML(client, editable) {
       <button class="back" id="muscle-back"><i class="ti ti-chevron-left"></i> ${editable ? "Aluno" : "Início"}</button>
       <div class="display day-title" style="font-size:18px;">Volume muscular</div>
     </div>
-    <p class="muted-note" style="margin-bottom:18px;">Total de séries por grupo muscular, somando todos os treinos cadastrados. A parte colorida da barra mostra quanto já foi feito.</p>
+    <p class="muted-note" style="margin-bottom:18px;">Total de séries por grupo muscular, somando todos os treinos cadastrados. A parte colorida da barra mostra quanto já foi feito. Exercícios compostos contam ½ série a mais pro músculo sinergista (ex.: supino soma ½ série pro tríceps).</p>
     ${
       data.length === 0
         ? `<p class="muted-note">Nenhum exercício com grupo muscular classificado ainda. Os exercícios são classificados sozinhos pelo nome — se algum não aparecer aqui, digite o nome dele de novo ou escolha o grupo manualmente.</p>`
@@ -2391,7 +2425,7 @@ function muscleVolumeHTML(client, editable) {
               <div>
                 <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:5px;">
                   <span style="font-size:14px; color:var(--chalk); font-weight:600;">${escapeHTML(muscle)}</span>
-                  <span style="font-size:12px; color:var(--muted);">${v.done}/${v.total} séries</span>
+                  <span style="font-size:12px; color:var(--muted);">${fmtVol(v.done)}/${fmtVol(v.total)} séries</span>
                 </div>
                 <div style="background:var(--panelAlt); border:1px solid var(--line); border-radius:8px; height:16px; position:relative; overflow:hidden;">
                   <div style="position:absolute; top:0; left:0; height:100%; width:${totalPct}%; background:var(--line);"></div>
