@@ -60,7 +60,7 @@ let clients = []; // só preenchido para o treinador
 let myClient = null; // só preenchido para o aluno
 let unsubscribe = null;
 
-let ui = { view: "loading", selectedId: null, activeDayId: null, progOpen: false, progMode: "table", progKey: null, studentEnteredTreinos: false, calendarOpen: false, planWeekKey: null, themeOpen: false, cardioOpen: false, feedbackOpen: false };
+let ui = { view: "loading", selectedId: null, activeDayId: null, progOpen: false, progMode: "table", progKey: null, studentEnteredTreinos: false, calendarOpen: false, planWeekKey: null, themeOpen: false, cardioOpen: false, feedbackOpen: false, muscleOpen: false };
 let draggedDayId = null;
 let collapsedEx = {}; // exercícios minimizados; por padrão, todo exercício começa minimizado
 const isCollapsed = (exId) => collapsedEx[exId] !== false;
@@ -855,12 +855,29 @@ function muscleVolume(day) {
   return Object.entries(byMuscle).sort((a, b) => b[1].total - a[1].total);
 }
 
+function clientMuscleVolume(client) {
+  const byMuscle = {};
+  for (const day of client.days || []) {
+    for (const ex of day.exercises || []) {
+      const muscle = ex.muscle || "";
+      if (!muscle) continue;
+      if (!byMuscle[muscle]) byMuscle[muscle] = { done: 0, total: 0 };
+      for (const s of ex.sets || []) {
+        byMuscle[muscle].total++;
+        if (s.repsDone) byMuscle[muscle].done++;
+      }
+    }
+  }
+  return Object.entries(byMuscle).sort((a, b) => b[1].total - a[1].total);
+}
+
 function clientAreaHTML(client, editable) {
   if (ui.progOpen) return progressionHTML(client);
   if (ui.calendarOpen) return calendarHTML(client, editable);
   if (ui.planWeekKey) return planEditHTML(client, editable);
   if (ui.cardioOpen) return cardioHTML(client, editable);
   if (ui.feedbackOpen) return feedbackHTML(client, editable);
+  if (ui.muscleOpen) return muscleVolumeHTML(client, editable);
   return clientAreaHTMLInner(client, editable);
 }
 
@@ -875,6 +892,7 @@ function clientAreaHTMLInner(client, editable) {
               <button class="dashed-btn" id="open-calendar"><i class="ti ti-calendar-stats"></i> Calendário</button>
               <button class="dashed-btn" id="open-cardio"><i class="ti ti-heart-rate-monitor"></i> Cardio</button>
               <button class="dashed-btn" id="open-progression"><i class="ti ti-chart-line"></i> Progressão</button>
+              <button class="dashed-btn" id="open-muscle"><i class="ti ti-chart-donut-3"></i> Volume muscular</button>
               <button class="dashed-btn" id="open-feedback"><i class="ti ti-message-circle"></i> Feedbacks</button>
             </div>`
           : ""
@@ -1090,6 +1108,10 @@ function wireClientArea(client, editable) {
     wireFeedback(client, editable);
     return;
   }
+  if (ui.muscleOpen) {
+    wireMuscleVolume(client, editable);
+    return;
+  }
 
   wireClientAreaInner(client, editable);
 }
@@ -1120,6 +1142,14 @@ function wireClientAreaInner(client, editable) {
   if (openCardioBtn) {
     openCardioBtn.onclick = () => {
       ui.cardioOpen = true;
+      render();
+    };
+  }
+
+  const openMuscleBtn = document.getElementById("open-muscle");
+  if (openMuscleBtn) {
+    openMuscleBtn.onclick = () => {
+      ui.muscleOpen = true;
       render();
     };
   }
@@ -1310,7 +1340,16 @@ function wireClientAreaInner(client, editable) {
           if (d.id !== ui.activeDayId) return d;
           return {
             ...d,
-            exercises: (d.exercises || []).map((ex) => (ex.id === exId ? { ...ex, [field]: input.value } : ex)),
+            exercises: (d.exercises || []).map((ex) => {
+              if (ex.id !== exId) return ex;
+              const patch = { [field]: input.value };
+              // se o nome mudou e o músculo ainda não foi escolhido, tenta adivinhar sozinho
+              if (field === "name" && !ex.muscle) {
+                const guessed = guessMuscle(input.value);
+                if (guessed) patch.muscle = guessed;
+              }
+              return { ...ex, ...patch };
+            }),
           };
         });
         updateDays(client, days);
@@ -2326,6 +2365,49 @@ function wireFeedback(client, editable) {
       saveClient(client.id, { feedback: next });
     };
   });
+}
+
+// ---------- volume por grupo muscular (infográfico) ----------
+
+function muscleVolumeHTML(client, editable) {
+  const data = clientMuscleVolume(client);
+  const maxTotal = data.length ? Math.max(...data.map(([, v]) => v.total)) : 1;
+
+  return `
+    <div class="day-head">
+      <button class="back" id="muscle-back"><i class="ti ti-chevron-left"></i> ${editable ? "Aluno" : "Início"}</button>
+      <div class="display day-title" style="font-size:18px;">Volume muscular</div>
+    </div>
+    <p class="muted-note" style="margin-bottom:18px;">Total de séries por grupo muscular, somando todos os treinos cadastrados. A parte colorida da barra mostra quanto já foi feito.</p>
+    ${
+      data.length === 0
+        ? `<p class="muted-note">Nenhum exercício com grupo muscular classificado ainda. Os exercícios são classificados sozinhos pelo nome — se algum não aparecer aqui, digite o nome dele de novo ou escolha o grupo manualmente.</p>`
+        : `<div style="display:flex; flex-direction:column; gap:16px;">
+            ${data
+              .map(([muscle, v]) => {
+                const totalPct = Math.round((v.total / maxTotal) * 100);
+                const donePct = Math.round((v.done / maxTotal) * 100);
+                return `
+              <div>
+                <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:5px;">
+                  <span style="font-size:14px; color:var(--chalk); font-weight:600;">${escapeHTML(muscle)}</span>
+                  <span style="font-size:12px; color:var(--muted);">${v.done}/${v.total} séries</span>
+                </div>
+                <div style="background:var(--panelAlt); border:1px solid var(--line); border-radius:8px; height:16px; position:relative; overflow:hidden;">
+                  <div style="position:absolute; top:0; left:0; height:100%; width:${totalPct}%; background:var(--line);"></div>
+                  <div style="position:absolute; top:0; left:0; height:100%; width:${donePct}%; background:var(--red);"></div>
+                </div>
+              </div>`;
+              })
+              .join("")}
+          </div>`
+    }
+  `;
+}
+
+function wireMuscleVolume(client, editable) {
+  const backBtn = el("muscle-back");
+  if (backBtn) backBtn.onclick = () => { ui.muscleOpen = false; render(); };
 }
 
 function planEditHTML(client, editable) {
