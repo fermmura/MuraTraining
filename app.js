@@ -2127,12 +2127,22 @@ function calendarHTML(client, editable) {
   const activeKey = client.activeWeekKey || weekKeyOf(todayKey());
   const plans = client.weekPlans || [];
   const offsets = [-2, -1, 0, 1, 2, 3];
+  const realCurrentKey = weekKeyOf(todayKey());
+  const dateIsWrong = editable && activeKey !== realCurrentKey;
 
   return `
     <div class="day-head">
       <button class="back" id="cal-back"><i class="ti ti-chevron-left"></i> Aluno</button>
       <div class="display day-title">Calendário</div>
     </div>
+    ${
+      dateIsWrong
+        ? `<div style="background:var(--redDim); border:1px solid var(--red); border-radius:10px; padding:10px 12px; margin-bottom:12px; font-size:12px; color:var(--chalk);">
+            A "semana atual" marcada aqui (${weekRangeLabel(activeKey)}) não bate com a data de hoje.
+            <button id="fix-week-date" style="display:block; margin-top:6px; color:var(--plate); text-decoration:underline;">Corrigir pra semana de hoje (${weekRangeLabel(realCurrentKey)})</button>
+          </div>`
+        : ""
+    }
     <div style="display:flex; flex-direction:column; gap:8px;">
       ${offsets
         .map((off) => {
@@ -2184,6 +2194,13 @@ function calendarHTML(client, editable) {
 function wireCalendar(client, editable) {
   const backBtn = el("cal-back");
   if (backBtn) backBtn.onclick = () => { ui.calendarOpen = false; render(); };
+
+  const fixBtn = el("fix-week-date");
+  if (fixBtn) {
+    fixBtn.onclick = async () => {
+      await saveClient(client.id, { activeWeekKey: weekKeyOf(todayKey()) });
+    };
+  }
 
   document.querySelectorAll("[data-calweek]").forEach((row) => {
     row.onclick = async () => {
@@ -2560,7 +2577,7 @@ function wirePlanEdit(client, editable) {
     activateBtn.onclick = async () => {
       if (!confirm(`Ativar o plano de ${weekRangeLabel(plan.weekKey)} como semana atual agora? Isso substitui o treino atual do aluno.`)) return;
       const nextPlans = (client.weekPlans || []).filter((p) => p.id !== plan.id);
-      await saveClient(client.id, { days: plan.days, activeWeekKey: plan.weekKey, weekPlans: nextPlans });
+      await saveClient(client.id, { days: plan.days, activeWeekKey: weekKeyOf(todayKey()), weekPlans: nextPlans });
       ui.planWeekKey = null;
       ui.calendarOpen = false;
     };
