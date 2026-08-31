@@ -63,6 +63,7 @@ let unsubscribe = null;
 let ui = { view: "loading", selectedId: null, activeDayId: null, progOpen: false, progMode: "table", progKey: null, studentEnteredTreinos: false, calendarOpen: false, planWeekKey: null, themeOpen: false, cardioOpen: false, feedbackOpen: false, muscleOpen: false, pastWeekKey: null };
 let draggedDayId = null;
 let collapsedEx = {}; // exercícios minimizados; por padrão, todo exercício começa minimizado
+let openNotes = {}; // observações do aluno abertas manualmente nessa sessão
 const isCollapsed = (exId) => collapsedEx[exId] !== false;
 
 // ---------- autenticação ----------
@@ -1002,6 +1003,22 @@ function clientAreaHTMLInner(client, editable) {
   `;
 }
 
+function studentNoteHTML(ex) {
+  const isOpen = !!openNotes[ex.id] || !!ex.studentNote;
+  if (!isOpen) {
+    return `<button type="button" class="dashed-btn" data-notetoggle="${ex.id}" style="margin-top:8px;font-size:11px;padding:5px 10px;">
+              <i class="ti ti-message-circle-plus"></i> adicionar observação
+            </button>`;
+  }
+  return `
+    <button type="button" class="dashed-btn" data-notetoggle="${ex.id}" style="margin-top:8px;font-size:11px;padding:5px 10px;background:var(--redDim);border-color:var(--red);color:#FF6B5C;">
+      <i class="ti ti-message-circle-x"></i> observação ativa
+    </button>
+    <div style="margin-top:6px;background:var(--panelAlt);border:1px solid var(--red);border-radius:8px;padding:8px 10px;">
+      <input data-studentnote="${ex.id}" value="${attr(ex.studentNote || "")}" placeholder="escreva algo sobre esse exercício…" style="width:100%;background:transparent;border:none;outline:none;color:var(--chalk);font-size:12px;" />
+    </div>`;
+}
+
 function exerciseHTML(ex, editable, index, total) {
   const collapsed = isCollapsed(ex.id);
   return `
@@ -1066,6 +1083,7 @@ function exerciseHTML(ex, editable, index, total) {
           <label style="font-size:11px;font-weight:700;color:var(--muted);">SÉRIES DE TRABALHO</label>
           ${(ex.sets || []).map((s, i) => setRowHTML(ex.id, s, i, editable)).join("")}
           ${editable ? `<button class="dashed-btn" data-addset="${ex.id}" style="margin-top:6px;">+ série</button>` : ""}
+          ${studentNoteHTML(ex)}
         </div>
       </div>
     </div>`;
@@ -1447,6 +1465,28 @@ function wireClientAreaInner(client, editable) {
       });
       updateDays(client, days);
     };
+
+    const noteToggleBtn = card.querySelector(`[data-notetoggle="${exId}"]`);
+    if (noteToggleBtn) {
+      noteToggleBtn.onclick = () => {
+        openNotes[exId] = !openNotes[exId];
+        render();
+      };
+    }
+
+    const noteInput = card.querySelector(`[data-studentnote="${exId}"]`);
+    if (noteInput) {
+      noteInput.onchange = () => {
+        const days = (client.days || []).map((d) => {
+          if (d.id !== ui.activeDayId) return d;
+          return {
+            ...d,
+            exercises: (d.exercises || []).map((ex) => (ex.id === exId ? { ...ex, studentNote: noteInput.value } : ex)),
+          };
+        });
+        updateDays(client, days);
+      };
+    }
   });
 
   // séries: reps e kg sempre editáveis (mesmo pro aluno); resto só se editable
