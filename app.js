@@ -1868,7 +1868,7 @@ function closeFeitoPicker() {
 
 function openFeitoPicker(client, exId, setId, currentVal) {
   const el = document.getElementById("feito-picker");
-  const nums = Array.from({ length: 15 }, (_, i) => i + 1);
+  const nums = Array.from({ length: 16 }, (_, i) => i); // 0 a 15
 
   el.innerHTML = `
     <div class="fp-backdrop" id="fp-backdrop"></div>
@@ -1879,6 +1879,7 @@ function openFeitoPicker(client, exId, setId, currentVal) {
         ${nums
           .map((n) => `<div class="fp-item ${String(n) === String(currentVal) ? "selected" : ""}" data-num="${n}">${n}</div>`)
           .join("")}
+        <div class="fp-item fp-item-more" data-more="1">…</div>
         <div class="fp-pad"></div>
       </div>
       <button type="button" class="fp-cancel" id="fp-cancel">Cancelar</button>
@@ -1896,6 +1897,18 @@ function openFeitoPicker(client, exId, setId, currentVal) {
       closeFeitoPicker();
     };
   });
+
+  const moreBtn = el.querySelector("[data-more]");
+  if (moreBtn) {
+    moreBtn.onclick = () => {
+      const typed = prompt("Quantas repetições você fez?", currentVal || "");
+      if (typed === null) return;
+      const cleaned = typed.trim();
+      if (!cleaned) return;
+      saveSetField(client, ui.activeDayId, exId, setId, "repsDone", cleaned);
+      closeFeitoPicker();
+    };
+  }
 
   document.getElementById("fp-backdrop").onclick = closeFeitoPicker;
   document.getElementById("fp-cancel").onclick = closeFeitoPicker;
