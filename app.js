@@ -14,6 +14,7 @@ db.enablePersistence({ synchronizeTabs: true }).catch(() => {
 });
 
 const uid = () => Math.random().toString(36).slice(2, 10);
+let lastSeenRecorded = false;
 
 const el = (id) => document.getElementById(id);
 const appEl = document.getElementById("app");
@@ -94,7 +95,13 @@ auth.onAuthStateChanged((user) => {
       .where("email", "==", user.email.toLowerCase())
       .onSnapshot((snap) => {
         myClient = snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() };
-        if (myClient) maybePromoteWeek(myClient);
+        if (myClient) {
+          maybePromoteWeek(myClient);
+          if (!lastSeenRecorded) {
+            lastSeenRecorded = true;
+            db.collection("clients").doc(myClient.id).update({ lastSeen: Date.now() }).catch(() => {});
+          }
+        }
         render();
       });
   }
@@ -450,6 +457,7 @@ function trainerHTML() {
                 <button class="copy-btn" data-copy="${c.id}">copiar login</button>
               </div>
               <span class="ce">${escapeHTML(c.email)}</span>
+              <span class="ce" style="display:flex;align-items:center;gap:3px;"><i class="ti ti-clock" style="font-size:10px;"></i> ${timeAgo(c.lastSeen)}</span>
               ${
                 isSelected
                   ? `<div style="display:flex;align-items:center;gap:4px;margin-top:2px;">
@@ -913,10 +921,10 @@ function clientAreaHTMLInner(client, editable) {
       ${
         !client.__planId
           ? `<div class="toolbar-nav">
-              <button class="dashed-btn" id="open-calendar"><i class="ti ti-calendar-stats"></i> Calendário</button>
+              ${editable ? `<button class="dashed-btn" id="open-calendar"><i class="ti ti-calendar-stats"></i> Calendário</button>` : ""}
               <button class="dashed-btn" id="open-cardio"><i class="ti ti-heart-rate-monitor"></i> Cardio</button>
               <button class="dashed-btn" id="open-progression"><i class="ti ti-chart-line"></i> Progressão</button>
-              <button class="dashed-btn" id="open-muscle"><i class="ti ti-chart-donut-3"></i> Volume muscular</button>
+              ${editable ? `<button class="dashed-btn" id="open-muscle"><i class="ti ti-chart-donut-3"></i> Volume muscular</button>` : ""}
               <button class="dashed-btn" id="open-feedback"><i class="ti ti-message-circle"></i> Feedbacks</button>
             </div>`
           : ""
@@ -1956,6 +1964,21 @@ function openFeitoPicker(client, exId, setId, currentVal) {
 
 // ---------- tela de progressão (tabela + gráfico, só treinador) ----------
 
+function timeAgo(ms) {
+  if (!ms) return "nunca entrou";
+  const diff = Date.now() - ms;
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return "agora mesmo";
+  if (min < 60) return `há ${min}min`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `há ${h}h`;
+  const d = Math.floor(h / 24);
+  if (d < 7) return `há ${d}d`;
+  const w = Math.floor(d / 7);
+  if (w < 5) return `há ${w}sem`;
+  return `há ${Math.floor(d / 30)}mês`;
+}
+
 function weekLabel(weekKey) {
   const d = new Date(weekKey + "T00:00:00");
   const day = String(d.getDate()).padStart(2, "0");
@@ -1994,17 +2017,74 @@ function progressionHTML(client) {
       <button class="back" id="prog-back"><i class="ti ti-chevron-left"></i> Aluno</button>
       <div class="display day-title">Progressão</div>
     </div>
-    <div style="display:flex; gap:8px; margin-bottom:14px;">
+    <div style="display:flex; gap:8px; margin-bottom:14px; flex-wrap:wrap;">
+      <button class="dashed-btn" id="prog-tab-overall" style="${ui.progMode === "overall" ? "border-style:solid;color:var(--chalk);" : ""}">Treino inteiro</button>
       <button class="dashed-btn" id="prog-tab-table" style="${ui.progMode === "table" ? "border-style:solid;color:var(--chalk);" : ""}">Tabela</button>
       <button class="dashed-btn" id="prog-tab-chart" style="${ui.progMode === "chart" ? "border-style:solid;color:var(--chalk);" : ""}">Gráfico</button>
     </div>
     ${
       rows.length === 0
         ? `<p class="muted-note">Ainda não há histórico. Assim que reps ou kg forem alterados pelo aluno (ou por você), a progressão aparece aqui, semana a semana.</p>`
+        : ui.progMode === "overall"
+        ? progOverallHTML(client)
         : ui.progMode === "table"
         ? progTableHTML(rows, weeks)
         : progChartHTML(rows)
     }`;
+}
+
+// visão do treino INTEIRO (todos os exercícios juntos), não um exercício
+// específico — mostra o volume total de séries válidas por semana
+function progOverallHTML(client) {
+  return `
+    <p class="muted-note" style="margin-bottom:14px;">Total de séries válidas (com "feito" preenchido) em TODOS os exercícios, semana a semana — visão geral do progresso do treino inteiro.</p>
+    <div style="position:relative; width:100%; height:240px;">
+      <canvas id="prog-overall-canvas"></canvas>
+    </div>`;
+}
+
+function renderOverallChart(client) {
+  const canvas = document.getElementById("prog-overall-canvas");
+  if (!canvas || !window.Chart) return;
+  const byWeek = {};
+  for (const h of client.history || []) {
+    if (!h.repsDone) continue;
+    byWeek[h.weekKey] = (byWeek[h.weekKey] || 0) + 1;
+  }
+  const weeks = Object.keys(byWeek).sort();
+  const labels = weeks.map(weekLabel);
+  const data = weeks.map((w) => byWeek[w]);
+
+  if (progChartInstance) progChartInstance.destroy();
+  progChartInstance = new Chart(canvas, {
+    type: "line",
+    data: {
+      labels,
+      datasets: [
+        {
+          data,
+          borderColor: "#FF4433",
+          backgroundColor: "rgba(255,68,51,0.1)",
+          fill: true,
+          tension: 0.3,
+          pointRadius: 4,
+          pointBackgroundColor: "#FF4433",
+          pointBorderColor: "#17161A",
+          pointBorderWidth: 2,
+          borderWidth: 2,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        y: { beginAtZero: true, ticks: { color: "#9A94A6", font: { size: 11 } }, grid: { color: "#2A2830" } },
+        x: { ticks: { color: "#9A94A6", font: { size: 11 } }, grid: { display: false } },
+      },
+    },
+  });
 }
 
 function progTableHTML(rows, weeks) {
@@ -2118,10 +2198,16 @@ function wireProgression(client) {
   const backBtn = document.getElementById("prog-back");
   if (backBtn) backBtn.onclick = () => { ui.progOpen = false; render(); };
 
+  const tabOverall = document.getElementById("prog-tab-overall");
   const tabTable = document.getElementById("prog-tab-table");
   const tabChart = document.getElementById("prog-tab-chart");
+  if (tabOverall) tabOverall.onclick = () => { ui.progMode = "overall"; render(); };
   if (tabTable) tabTable.onclick = () => { ui.progMode = "table"; render(); };
   if (tabChart) tabChart.onclick = () => { ui.progMode = "chart"; render(); };
+
+  if (ui.progMode === "overall") {
+    renderOverallChart(client);
+  }
 
   if (ui.progMode === "chart") {
     const select = document.getElementById("prog-select");
