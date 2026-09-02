@@ -125,6 +125,7 @@ function doLogin(email, password) {
 }
 
 function doLogout() {
+  stopWorkoutClock();
   ui.studentEnteredTreinos = false;
   auth.signOut();
 }
@@ -787,6 +788,37 @@ function studentHTML() {
 
 // ---------------- ÁREA DE TREINOS (compartilhada treinador/aluno) ----------------
 
+// ---------- relógio ao vivo do cronômetro de treino ----------
+
+let workoutClockInterval = null;
+
+function stopWorkoutClock() {
+  if (workoutClockInterval) {
+    clearInterval(workoutClockInterval);
+    workoutClockInterval = null;
+  }
+}
+
+function startWorkoutClock() {
+  stopWorkoutClock();
+  const displayEl = document.getElementById("workout-timer-display");
+  if (!displayEl) return;
+  const startedAt = Number(displayEl.dataset.started);
+  if (!startedAt) return;
+
+  const tick = () => {
+    const el2 = document.getElementById("workout-timer-display");
+    if (!el2) { stopWorkoutClock(); return; }
+    const elapsed = Math.max(0, Date.now() - startedAt);
+    const totalSec = Math.floor(elapsed / 1000);
+    const mm = String(Math.floor(totalSec / 60)).padStart(2, "0");
+    const ss = String(totalSec % 60).padStart(2, "0");
+    el2.textContent = `${mm}:${ss}`;
+  };
+  tick();
+  workoutClockInterval = setInterval(tick, 1000);
+}
+
 function dayVolume(day) {
   let total = 0, done = 0;
   for (const ex of day.exercises || []) {
@@ -948,6 +980,12 @@ function clientAreaHTMLInner(client, editable) {
         ${(client.days || [])
           .map((d, dayIdx, dayArr) => {
             const vol = dayVolume(d);
+            const lastSession = [...(client.workoutSessions || [])].filter((s) => s.dayId === d.id).sort((a, b) => b.endedAt - a.endedAt)[0];
+            const sessionLine = d.timerStartedAt
+              ? `<div class="count" style="color:var(--red);display:flex;align-items:center;gap:3px;"><i class="ti ti-player-play" style="font-size:10px;"></i> em andamento</div>`
+              : lastSession && lastSession.dateKey === todayKey()
+              ? `<div class="count" style="color:var(--steel);display:flex;align-items:center;gap:3px;"><i class="ti ti-clock" style="font-size:10px;"></i> ${lastSession.durationMin}min hoje</div>`
+              : "";
             return `
           <div class="sq" data-open="${d.id}" ${editable ? 'draggable="true"' : ""}>
             ${
@@ -965,6 +1003,7 @@ function clientAreaHTMLInner(client, editable) {
               <div class="title display">${escapeHTML(d.title || "Sem título")}</div>
               <div class="count">${(d.exercises || []).length} exercício${(d.exercises || []).length !== 1 ? "s" : ""}</div>
               ${vol.total > 0 ? `<div class="count" style="color:${vol.done === vol.total ? "#639922" : "var(--muted)"};">${vol.done}/${vol.total} séries feitas</div>` : ""}
+              ${sessionLine}
             </div>
           </div>`;
           })
@@ -1004,10 +1043,28 @@ function clientAreaHTMLInner(client, editable) {
         return totalLine + muscleLine;
       })()
     }
+    ${
+      !day.timerStartedAt
+        ? `<button type="button" class="cta" id="start-workout" style="display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:14px;">
+            <i class="ti ti-player-play"></i> INICIAR TREINO
+          </button>`
+        : ""
+    }
     <div id="exercises-wrap">
       ${(day.exercises || []).map((ex, i, arr) => exerciseHTML(ex, editable, i, arr.length)).join("")}
     </div>
     ${editable ? `<button class="dashed-btn" id="add-exercise">+ adicionar exercício</button>` : ""}
+    ${
+      day.timerStartedAt
+        ? `<div style="background:#2A2018;border:1px solid var(--red);border-radius:10px;padding:14px;text-align:center;margin-top:14px;">
+            <div style="font-size:10px;color:#FF7A6E;letter-spacing:.05em;margin-bottom:4px;">TREINO EM ANDAMENTO</div>
+            <div class="display" id="workout-timer-display" data-started="${day.timerStartedAt}" style="font-size:28px;color:var(--chalk);margin-bottom:10px;">00:00</div>
+            <button type="button" style="display:flex;align-items:center;justify-content:center;gap:6px;width:100%;background:var(--red);border:none;border-radius:8px;padding:10px;color:#fff;font-size:13px;font-weight:600;" id="finish-workout">
+              <i class="ti ti-player-stop"></i> FINALIZAR TREINO
+            </button>
+          </div>`
+        : ""
+    }
   `;
 }
 
@@ -1325,7 +1382,37 @@ function wireClientAreaInner(client, editable) {
 
   // detalhe do dia
   const backBtn = el("back-to-grid");
-  if (backBtn) backBtn.onclick = () => { ui.activeDayId = null; render(); };
+  if (backBtn) backBtn.onclick = () => { stopWorkoutClock(); ui.activeDayId = null; render(); };
+
+  const startBtn = el("start-workout");
+  if (startBtn) {
+    startBtn.onclick = async () => {
+      const day = (client.days || []).find((d) => d.id === ui.activeDayId);
+      if (!day) return;
+      if (!confirm(`Iniciar o cronômetro de "${day.title}" agora?`)) return;
+      const nextDays = (client.days || []).map((d) => (d.id === day.id ? { ...d, timerStartedAt: Date.now() } : d));
+      await saveClient(client.id, { days: nextDays });
+    };
+  }
+
+  const finishBtn = el("finish-workout");
+  if (finishBtn) {
+    finishBtn.onclick = async () => {
+      const day = (client.days || []).find((d) => d.id === ui.activeDayId);
+      if (!day || !day.timerStartedAt) return;
+      if (!confirm(`Finalizar "${day.title}" agora? Isso para o cronômetro e registra a duração.`)) return;
+      const startedAt = day.timerStartedAt;
+      const endedAt = Date.now();
+      const durationMin = Math.max(1, Math.round((endedAt - startedAt) / 60000));
+      const session = { id: uid(), dayId: day.id, dayTitle: day.title, startedAt, endedAt, durationMin, dateKey: todayKey(), weekKey: weekKeyOf(todayKey()) };
+      const nextDays = (client.days || []).map((d) => (d.id === day.id ? { ...d, timerStartedAt: null } : d));
+      const nextSessions = [...(client.workoutSessions || []), session];
+      stopWorkoutClock();
+      await saveClient(client.id, { days: nextDays, workoutSessions: nextSessions });
+    };
+  }
+
+  startWorkoutClock();
 
   const dayTitleInput = el("day-title-input");
   if (dayTitleInput) dayTitleInput.onchange = () => {
