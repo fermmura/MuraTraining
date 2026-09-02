@@ -1068,6 +1068,16 @@ function clientAreaHTMLInner(client, editable) {
   `;
 }
 
+function dateTimeLabel(ms) {
+  if (!ms) return "";
+  const d = new Date(ms);
+  const day = String(d.getDate()).padStart(2, "0");
+  const months = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  return `${day}/${months[d.getMonth()]} às ${hh}:${mm}`;
+}
+
 function studentNoteHTML(ex) {
   const isOpen = !!openNotes[ex.id] || !!ex.studentNote;
   if (!isOpen) {
@@ -1081,6 +1091,7 @@ function studentNoteHTML(ex) {
     </button>
     <div style="margin-top:6px;background:var(--panelAlt);border:1px solid var(--red);border-radius:8px;padding:8px 10px;">
       <input data-studentnote="${ex.id}" value="${attr(ex.studentNote || "")}" placeholder="escreva algo sobre esse exercício…" style="width:100%;background:transparent;border:none;outline:none;color:var(--chalk);font-size:12px;" />
+      ${ex.studentNoteAt ? `<div style="font-size:10px;color:var(--muted);margin-top:4px;display:flex;align-items:center;gap:3px;"><i class="ti ti-clock" style="font-size:10px;"></i> escrito em ${dateTimeLabel(ex.studentNoteAt)}</div>` : ""}
     </div>`;
 }
 
@@ -1576,7 +1587,7 @@ function wireClientAreaInner(client, editable) {
           if (d.id !== ui.activeDayId) return d;
           return {
             ...d,
-            exercises: (d.exercises || []).map((ex) => (ex.id === exId ? { ...ex, studentNote: noteInput.value } : ex)),
+            exercises: (d.exercises || []).map((ex) => (ex.id === exId ? { ...ex, studentNote: noteInput.value, studentNoteAt: Date.now() } : ex)),
           };
         });
         updateDays(client, days);
