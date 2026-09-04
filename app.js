@@ -831,7 +831,7 @@ function dayVolume(day) {
 }
 
 const MUSCLE_GROUPS = [
-  "Peito", "Costas", "Ombro", "Trapézio", "Bíceps", "Tríceps", "Antebraço",
+  "Peito", "Costas", "Ombro", "Deltoide posterior", "Trapézio", "Bíceps", "Tríceps", "Antebraço",
   "Quadríceps", "Posterior de coxa", "Glúteo", "Adutores", "Panturrilha", "Abdômen", "Lombar",
 ];
 
@@ -865,6 +865,7 @@ function dayIcon(title) {
 function guessMuscle(name) {
   const n = (name || "").toLowerCase();
   const test = (...words) => words.some((w) => n.includes(w));
+  if (test("crucifixo invertido", "crucifixo inverso", "face pull", "remada alta", "elevação posterior", "elevacao posterior", "peck deck invertido", "peckdeck invertido")) return "Deltoide posterior";
   if (test("supino", "peck deck", "peckdeck", "crucifixo", "cross over", "crossover", "voador")) return "Peito";
   if (test("puxada", "remada", "pulldown", "barra fixa", "pull-up", "pulley costas", "levantamento terra", "terra convencional")) return "Costas";
   if (test("desenvolvimento", "elevação lateral", "elevacao lateral", "elevação frontal", "arnold")) return "Ombro";
@@ -889,6 +890,7 @@ function guessMuscle(name) {
 function guessSynergist(name) {
   const n = (name || "").toLowerCase();
   const test = (...words) => words.some((w) => n.includes(w));
+  if (test("crucifixo invertido", "crucifixo inverso", "face pull", "remada alta", "elevação posterior", "elevacao posterior")) return "Trapézio";
   if (test("supino", "crucifixo", "cross over", "crossover", "voador") && !test("máquina peito isolad")) return "Tríceps";
   if (test("puxada", "remada", "pulldown", "barra fixa", "pull-up", "pulley costas")) return "Bíceps";
   if (test("desenvolvimento", "arnold")) return "Tríceps";
