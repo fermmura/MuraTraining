@@ -1143,9 +1143,7 @@ function exerciseHTML(ex, editable, index, total) {
           ${
             ex.photoUrl
               ? `<div style="margin-top:8px;position:relative;">
-                  <a href="${escapeHTML(ex.photoUrl)}" target="_blank" rel="noopener">
-                    <img src="${escapeHTML(ex.photoUrl)}" alt="Foto do exercício ${escapeHTML(ex.name || "")}" style="width:100%;max-height:220px;object-fit:cover;border-radius:8px;display:block;" />
-                  </a>
+                  <img src="${escapeHTML(ex.photoUrl)}" alt="Foto do exercício ${escapeHTML(ex.name || "")}" data-viewphoto="${ex.id}" style="width:100%;max-height:220px;object-fit:cover;border-radius:8px;display:block;cursor:zoom-in;" />
                   ${editable ? `<button data-rmphoto="${ex.id}" class="rm-x" style="position:absolute;top:6px;right:6px;background:rgba(0,0,0,.6);border-radius:6px;padding:4px;"><i class="ti ti-trash"></i></button>` : ""}
                 </div>`
               : editable
@@ -1154,6 +1152,20 @@ function exerciseHTML(ex, editable, index, total) {
                   <input type="file" accept="image/*" data-photoinput="${ex.id}" class="hidden" />
                 </label>
                 <span data-photostatus="${ex.id}" class="muted-note" style="margin-left:6px;font-size:11px;"></span>`
+              : ""
+          }
+          ${
+            ex.videoUrl
+              ? `<div style="margin-top:8px;display:flex;align-items:center;gap:6px;">
+                  <a href="${escapeHTML(ex.videoUrl)}" target="_blank" rel="noopener" class="dashed-btn" style="display:inline-flex;">
+                    <i class="ti ti-player-play"></i> Ver vídeo
+                  </a>
+                  ${editable ? `<button data-rmvideo="${ex.id}" class="rm-x"><i class="ti ti-trash"></i></button>` : ""}
+                </div>`
+              : editable
+              ? `<button class="dashed-btn" data-addvideo="${ex.id}" style="margin-top:8px;">
+                  <i class="ti ti-video-plus"></i> Adicionar vídeo
+                </button>`
               : ""
           }
         </div>
@@ -1251,6 +1263,7 @@ function wireClientAreaInner(client, editable) {
     wireImportModal(client);
     wireDuplicateModal(client);
   }
+  wirePhotoViewerModal();
 
   const openProgBtn = document.getElementById("open-progression");
   if (openProgBtn) {
@@ -1547,6 +1560,36 @@ function wireClientAreaInner(client, editable) {
         } catch (e) {
           if (statusEl) statusEl.textContent = "erro ao processar a foto";
         }
+      };
+    }
+
+    const viewPhotoEl = card.querySelector(`[data-viewphoto="${exId}"]`);
+    if (viewPhotoEl) {
+      viewPhotoEl.onclick = () => openPhotoViewer(viewPhotoEl.getAttribute("src"));
+    }
+
+    const addVideoBtn = card.querySelector(`[data-addvideo="${exId}"]`);
+    if (addVideoBtn) {
+      addVideoBtn.onclick = () => {
+        const url = prompt("Cole o link do vídeo (YouTube, Instagram, Drive, etc.):");
+        if (!url || !url.trim()) return;
+        const days = (client.days || []).map((d) => {
+          if (d.id !== ui.activeDayId) return d;
+          return { ...d, exercises: (d.exercises || []).map((ex) => (ex.id === exId ? { ...ex, videoUrl: url.trim() } : ex)) };
+        });
+        updateDays(client, days);
+      };
+    }
+
+    const rmVideoBtn = card.querySelector(`[data-rmvideo="${exId}"]`);
+    if (rmVideoBtn) {
+      rmVideoBtn.onclick = () => {
+        if (!confirm("Remover esse vídeo?")) return;
+        const days = (client.days || []).map((d) => {
+          if (d.id !== ui.activeDayId) return d;
+          return { ...d, exercises: (d.exercises || []).map((ex) => (ex.id === exId ? { ...ex, videoUrl: "" } : ex)) };
+        });
+        updateDays(client, days);
       };
     }
 
@@ -1914,6 +1957,22 @@ function parseWorkoutText(text) {
     }
   }
   return days;
+}
+
+function openPhotoViewer(url) {
+  if (!url) return;
+  document.getElementById("pv-img").src = url;
+  document.getElementById("photo-viewer-modal").classList.remove("hidden");
+}
+function closePhotoViewer() {
+  document.getElementById("photo-viewer-modal").classList.add("hidden");
+  document.getElementById("pv-img").src = "";
+}
+function wirePhotoViewerModal() {
+  const backdrop = document.getElementById("pv-backdrop");
+  const closeBtn = document.getElementById("pv-close");
+  if (backdrop) backdrop.onclick = closePhotoViewer;
+  if (closeBtn) closeBtn.onclick = closePhotoViewer;
 }
 
 function openImportModal() {
