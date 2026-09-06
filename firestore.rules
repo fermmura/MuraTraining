@@ -27,6 +27,17 @@ service cloud.firestore {
         request.resource.data.name == resource.data.name &&
         request.resource.data.email == resource.data.email &&
         request.resource.data.goal == resource.data.goal;
+
+      // fotos dos exercícios: cada uma no seu próprio documento (evita
+      // estourar o limite de 1MB do documento principal do aluno).
+      // O personal pode ler/escrever tudo; o aluno só pode LER as fotos
+      // da própria ficha (quem edita foto é sempre o personal).
+      match /photos/{exId} {
+        allow read: if isTrainer() ||
+          (request.auth != null &&
+           request.auth.token.email == get(/databases/$(database)/documents/clients/$(clientId)).data.email);
+        allow write: if isTrainer();
+      }
     }
 
     // tema visual do app: qualquer pessoa logada pode ler (afeta a tela de

@@ -247,11 +247,18 @@ function cloneDaysWithNewIds(days, resetDone = true) {
   return (days || []).map((d) => ({
     ...d,
     id: uid(),
-    exercises: (d.exercises || []).map((ex) => ({
-      ...ex,
-      id: uid(),
-      sets: (ex.sets || []).map((s) => ({ ...s, id: uid(), repsDone: resetDone ? "" : s.repsDone })),
-    })),
+    exercises: (d.exercises || []).map((ex) => {
+      // a foto (quando existe) fica guardada numa subcoleção à parte, indexada
+      // pelo id ANTIGO do exercício — como aqui geramos um id novo, não dá pra
+      // levar a foto junto (ela ficaria "órfã"). Por isso o exercício clonado
+      // sempre começa sem foto.
+      const { photoUrl, hasPhoto, ...rest } = ex;
+      return {
+        ...rest,
+        id: uid(),
+        sets: (ex.sets || []).map((s) => ({ ...s, id: uid(), repsDone: resetDone ? "" : s.repsDone })),
+      };
+    }),
   }));
 }
 
@@ -316,6 +323,83 @@ async function recordClientPassword(clientId, password) {
 
 function saveClient(id, patch) {
   db.collection("clients").doc(id).update(patch).catch((e) => alert("Erro ao salvar: " + e.message));
+}
+
+// ---------- fotos dos exercícios ----------
+// Cada documento do Firestore tem um limite de 1MB. Guardar as fotos (mesmo
+// comprimidas) direto dentro do documento do aluno faz ele estourar esse
+// limite conforme mais fotos vão sendo adicionadas ao longo das semanas.
+// Por isso cada foto mora no seu PRÓPRIO documento, numa subcoleção
+// "photos" do aluno — assim o documento principal do aluno fica sempre
+// pequeno, não importa quantas fotos existam.
+// O exercício, no documento principal, guarda só a flag `hasPhoto: true`.
+const photoCache = new Map(); // "clientId:exId" -> dataUrl (cache em memória, só desta sessão)
+
+function photoCacheKey(clientId, exId) {
+  return clientId + ":" + exId;
+}
+
+async function savePhoto(clientId, exId, dataUrl) {
+  await db.collection("clients").doc(clientId).collection("photos").doc(exId).set({ dataUrl });
+  photoCache.set(photoCacheKey(clientId, exId), dataUrl);
+}
+
+async function deletePhoto(clientId, exId) {
+  photoCache.delete(photoCacheKey(clientId, exId));
+  await db.collection("clients").doc(clientId).collection("photos").doc(exId).delete();
+}
+
+async function loadPhoto(clientId, exId) {
+  const key = photoCacheKey(clientId, exId);
+  if (photoCache.has(key)) return photoCache.get(key);
+  const snap = await db.collection("clients").doc(clientId).collection("photos").doc(exId).get();
+  const dataUrl = snap.exists ? snap.data().dataUrl || "" : "";
+  photoCache.set(key, dataUrl);
+  return dataUrl;
+}
+
+// migração automática: alunos antigos podem ter fotos salvas do jeito antigo
+// (embutidas direto no documento) — na primeira vez que o treinador abre a
+// ficha dele nesta sessão, movemos essas fotos pra subcoleção e enxugamos o
+// documento principal, sem precisar de nenhuma ação manual.
+const migratedPhotosThisSession = new Set();
+async function migrateLegacyPhotosOnce(client) {
+  if (!client || client.__planId) return;
+  if (migratedPhotosThisSession.has(client.id)) return;
+  migratedPhotosThisSession.add(client.id);
+
+  let changed = false;
+  async function migrateDays(days) {
+    const next = [];
+    for (const d of days || []) {
+      const exercises = [];
+      for (const ex of d.exercises || []) {
+        if (ex.photoUrl) {
+          try {
+            await savePhoto(client.id, ex.id, ex.photoUrl);
+            const { photoUrl, ...rest } = ex;
+            exercises.push({ ...rest, hasPhoto: true });
+            changed = true;
+            continue;
+          } catch (e) {
+            // se der erro ao migrar, mantém a foto como estava — tenta de novo depois
+          }
+        }
+        exercises.push(ex);
+      }
+      next.push({ ...d, exercises });
+    }
+    return next;
+  }
+
+  const nextDays = await migrateDays(client.days);
+  const nextPlans = [];
+  for (const p of client.weekPlans || []) {
+    nextPlans.push({ ...p, days: await migrateDays(p.days) });
+  }
+  if (changed) {
+    saveClient(client.id, { days: nextDays, weekPlans: nextPlans });
+  }
 }
 
 function emptySet() { return { id: uid(), repsGoal: "10", repsDone: "", load: "", intensity: 0, rir: "", rirEnabled: false }; }
@@ -1141,9 +1225,9 @@ function exerciseHTML(ex, editable, index, total) {
           <textarea rows="3" data-field="notes" data-autogrow="1" placeholder="ex.: preparatória com 2 séries leves de 15 reps; trabalho com cadência 2-0-2, descanso 90s"
             ${editable ? "" : "readonly"}>${escapeHTML(ex.notes || "")}</textarea>
           ${
-            ex.photoUrl
+            ex.photoUrl || ex.hasPhoto
               ? `<div style="margin-top:8px;position:relative;">
-                  <img src="${escapeHTML(ex.photoUrl)}" alt="Foto do exercício ${escapeHTML(ex.name || "")}" data-viewphoto="${ex.id}" style="width:100%;max-height:220px;object-fit:cover;border-radius:8px;display:block;cursor:zoom-in;" />
+                  <img src="${escapeHTML(ex.photoUrl || "")}" alt="Foto do exercício ${escapeHTML(ex.name || "")}" data-viewphoto="${ex.id}" data-photo-pending="${!ex.photoUrl && ex.hasPhoto ? "1" : ""}" style="width:100%;max-height:220px;object-fit:cover;border-radius:8px;display:block;cursor:zoom-in;background:#1a1a1a;" />
                   ${editable ? `<button data-rmphoto="${ex.id}" class="rm-x" style="position:absolute;top:6px;right:6px;background:rgba(0,0,0,.6);border-radius:6px;padding:4px;"><i class="ti ti-trash"></i></button>` : ""}
                 </div>`
               : editable
@@ -1225,6 +1309,8 @@ function setRowHTML(exId, s, i, editable) {
 
 function wireClientArea(client, editable) {
   if (!client) return;
+
+  if (editable) migrateLegacyPhotosOnce(client);
 
   if (ui.progOpen) {
     wireProgression(client);
@@ -1552,9 +1638,12 @@ function wireClientAreaInner(client, editable) {
             if (statusEl) statusEl.textContent = "foto muito grande/detalhada, tente outra";
             return;
           }
+          // a foto vai pro documento próprio dela (subcoleção "photos"), não
+          // pro documento do aluno — só a flag hasPhoto entra ali
+          await savePhoto(client.id, exId, dataUrl);
           const days = (client.days || []).map((d) => {
             if (d.id !== ui.activeDayId) return d;
-            return { ...d, exercises: (d.exercises || []).map((ex) => (ex.id === exId ? { ...ex, photoUrl: dataUrl } : ex)) };
+            return { ...d, exercises: (d.exercises || []).map((ex) => (ex.id === exId ? { ...ex, hasPhoto: true } : ex)) };
           });
           updateDays(client, days);
         } catch (e) {
@@ -1565,7 +1654,15 @@ function wireClientAreaInner(client, editable) {
 
     const viewPhotoEl = card.querySelector(`[data-viewphoto="${exId}"]`);
     if (viewPhotoEl) {
-      viewPhotoEl.onclick = () => openPhotoViewer(viewPhotoEl.getAttribute("src"));
+      if (viewPhotoEl.dataset.photoPending === "1") {
+        loadPhoto(client.id, exId).then((dataUrl) => {
+          if (dataUrl) viewPhotoEl.src = dataUrl;
+        });
+      }
+      viewPhotoEl.onclick = async () => {
+        const src = viewPhotoEl.getAttribute("src") || (await loadPhoto(client.id, exId));
+        openPhotoViewer(src);
+      };
     }
 
     const addVideoBtn = card.querySelector(`[data-addvideo="${exId}"]`);
@@ -1595,11 +1692,12 @@ function wireClientAreaInner(client, editable) {
 
     const rmPhotoBtn = card.querySelector(`[data-rmphoto="${exId}"]`);
     if (rmPhotoBtn) {
-      rmPhotoBtn.onclick = () => {
+      rmPhotoBtn.onclick = async () => {
         if (!confirm("Remover essa foto?")) return;
+        await deletePhoto(client.id, exId).catch(() => {});
         const days = (client.days || []).map((d) => {
           if (d.id !== ui.activeDayId) return d;
-          return { ...d, exercises: (d.exercises || []).map((ex) => (ex.id === exId ? { ...ex, photoUrl: "" } : ex)) };
+          return { ...d, exercises: (d.exercises || []).map((ex) => (ex.id === exId ? { ...ex, photoUrl: "", hasPhoto: false } : ex)) };
         });
         updateDays(client, days);
       };
