@@ -83,27 +83,33 @@ auth.onAuthStateChanged((user) => {
 
   if (isTrainer) {
     ui = { view: "trainer", selectedId: null, activeDayId: null };
-    unsubscribe = db.collection("clients").onSnapshot((snap) => {
-      clients = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      clients.forEach((c) => maybePromoteWeek(c));
-      render();
-    });
+    unsubscribe = db.collection("clients").onSnapshot(
+      (snap) => {
+        clients = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        clients.forEach((c) => maybePromoteWeek(c));
+        render();
+      },
+      (e) => handleSyncError(e)
+    );
   } else {
     ui = { view: "student", activeDayId: null };
     unsubscribe = db
       .collection("clients")
       .where("email", "==", user.email.toLowerCase())
-      .onSnapshot((snap) => {
-        myClient = snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() };
-        if (myClient) {
-          maybePromoteWeek(myClient);
-          if (!lastSeenRecorded) {
-            lastSeenRecorded = true;
-            db.collection("clients").doc(myClient.id).update({ lastSeen: Date.now() }).catch(() => {});
+      .onSnapshot(
+        (snap) => {
+          myClient = snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() };
+          if (myClient) {
+            maybePromoteWeek(myClient);
+            if (!lastSeenRecorded) {
+              lastSeenRecorded = true;
+              db.collection("clients").doc(myClient.id).update({ lastSeen: Date.now() }).catch(() => {});
+            }
           }
-        }
-        render();
-      });
+          render();
+        },
+        (e) => handleSyncError(e)
+      );
   }
   render();
 
@@ -321,8 +327,47 @@ async function recordClientPassword(clientId, password) {
 
 // ---------- leitura/escrita dos dados de treino ----------
 
+// no celular (principalmente iPhone/Safari, no app instalado como PWA),
+// o navegador às vezes "derruba" a conexão do cache offline sozinho —
+// costuma acontecer quando o app fica em segundo plano um tempo ou o sinal
+// cai no meio do treino. O erro técnico é feio e assusta o aluno; em vez de
+// mostrar isso cru, oferecemos direto o recarregamento, que resolve.
+function isIndexedDbConnectionError(e) {
+  const msg = (e && e.message) || "";
+  return /IndexedDb|IndexedDB/i.test(msg) && /(unavailable|connection|lost)/i.test(msg);
+}
+function handleSaveError(e) {
+  if (isIndexedDbConnectionError(e)) {
+    if (confirm("A conexão do app com o celular caiu por um instante (comum com sinal fraco) — isso não afeta o treino, só é preciso recarregar a página pra voltar a salvar. Recarregar agora?")) {
+      location.reload();
+    }
+    return;
+  }
+  alert("Erro ao salvar: " + e.message);
+}
+
+// mesma ideia, mas pra quando é a sincronização em tempo real que cai (não
+// um salvamento específico) — o app fica "parado" sem atualizar sozinho
+let syncErrorShown = false;
+function handleSyncError(e) {
+  if (syncErrorShown) return; // não empilha vários avisos iguais
+  syncErrorShown = true;
+  if (isIndexedDbConnectionError(e)) {
+    if (confirm("A conexão do app com o celular caiu por um instante (comum com sinal fraco) — é preciso recarregar a página pra voltar a sincronizar. Recarregar agora?")) {
+      location.reload();
+      return;
+    }
+  } else {
+    alert("Erro ao sincronizar com o servidor: " + e.message + "\n\nTente recarregar a página.");
+  }
+  syncErrorShown = false;
+}
+
 function saveClient(id, patch) {
-  db.collection("clients").doc(id).update(patch).catch((e) => alert("Erro ao salvar: " + e.message));
+  return db.collection("clients").doc(id).update(patch).then(
+    () => true,
+    (e) => { handleSaveError(e); return false; }
+  );
 }
 
 // ---------- fotos dos exercícios ----------
