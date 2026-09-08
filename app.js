@@ -1311,10 +1311,12 @@ function exerciseHTML(ex, editable, index, total, client) {
           <label style="font-size:11px;font-weight:700;color:var(--muted);">SÉRIES DE TRABALHO</label>
           ${(ex.sets || []).map((s, i) => {
             let refReps = "";
+            let isHistorical = false;
             if (client && client.__planId && ui.planWeekKey) {
               refReps = getPreviousWeekSetRef(client, ui.planWeekKey, ex.name, i);
+              if (refReps) isHistorical = true; // marca se tem valor histórico
             }
-            return setRowHTML(ex.id, s, i, editable, refReps);
+            return setRowHTML(ex.id, s, i, editable, refReps, isHistorical);
           }).join("")}
           ${editable ? `<button class="dashed-btn" data-addset="${ex.id}" style="margin-top:6px;">+ série</button>` : ""}
           ${studentNoteHTML(ex)}
@@ -1323,10 +1325,12 @@ function exerciseHTML(ex, editable, index, total, client) {
     </div>`;
 }
 
-function setRowHTML(exId, s, i, editable, refReps = "") {
+function setRowHTML(exId, s, i, editable, refReps = "", isHistorical = false) {
   const goal = s.repsGoal ?? s.reps ?? ""; // compatível com fichas antigas (campo único "reps")
   const rirOn = !!s.rirEnabled;
   const feitoPlaceholder = refReps ? refReps : "0"; // mostra o "feito" da semana passada como placeholder
+  const feitoValue = isHistorical && !editable ? "0" : (s.repsDone || ""); // aluno vê "0" para valores históricos
+  const inputStyle = isHistorical && editable ? "opacity:0.5;" : ""; // 50% de transparência para valores históricos em modo edição
   return `
     <div class="set-row" data-setid="${s.id}" data-exid="${exId}">
       <span class="set-idx">${i + 1}ª</span>
@@ -1337,8 +1341,8 @@ function setRowHTML(exId, s, i, editable, refReps = "") {
       <span class="stack" style="color:var(--chalk);position:relative;">
         ${
           editable
-            ? `<span class="box"><input data-field="repsDone" data-grow="1" value="${attr(s.repsDone)}" placeholder="${attr(feitoPlaceholder)}" /></span>`
-            : `<button type="button" class="box feito-open" data-feitoopen="1">${escapeHTML(s.repsDone || "–")}</button>`
+            ? `<span class="box" style="${inputStyle}"><input data-field="repsDone" data-grow="1" value="${attr(s.repsDone)}" placeholder="${attr(feitoPlaceholder)}" /></span>`
+            : `<button type="button" class="box feito-open" data-feitoopen="1">${escapeHTML(feitoValue || "–")}</button>`
         }
         <span class="unit">feito</span>
       </span>
