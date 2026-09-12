@@ -63,6 +63,8 @@ let unsubscribe = null;
 
 let ui = { view: "loading", selectedId: null, activeDayId: null, progOpen: false, progMode: "table", progKey: null, studentEnteredTreinos: false, calendarOpen: false, planWeekKey: null, planUnsaved: false, planSavedAt: null, themeOpen: false, cardioOpen: false, feedbackOpen: false, muscleOpen: false, pastWeekKey: null };
 let draggedDayId = null;
+let pendingPlanEdit = null; // rascunho do plano de semana futura em edição { clientId, planId, days }
+let renderQueuedFromSync = false; // redesenho adiado porque havia um campo em uso
 let collapsedEx = {}; // exercícios minimizados; por padrão, todo exercício começa minimizado
 let openNotes = {}; // observações do aluno abertas manualmente nessa sessão
 const isCollapsed = (exId) => collapsedEx[exId] !== false;
@@ -86,8 +88,12 @@ auth.onAuthStateChanged((user) => {
     unsubscribe = db.collection("clients").onSnapshot(
       (snap) => {
         clients = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        // o plano de semana futura que está sendo montado agora só existe na
+        // memória — reaplica ele por cima dos dados que acabaram de chegar,
+        // senão cada série que o aluno registra apaga o planejamento em curso
+        reapplyPendingPlanEdit();
         clients.forEach((c) => maybePromoteWeek(c));
-        render();
+        renderFromSync();
       },
       (e) => handleSyncError(e)
     );
@@ -106,7 +112,7 @@ auth.onAuthStateChanged((user) => {
               db.collection("clients").doc(myClient.id).update({ lastSeen: Date.now() }).catch(() => {});
             }
           }
-          render();
+          renderFromSync();
         },
         (e) => handleSyncError(e)
       );
@@ -516,6 +522,33 @@ function emptyExercise() { return { id: uid(), name: "", notes: "", sets: [empty
 
 function emptyDay(title) { return { id: uid(), title, exercises: [] }; }
 
+// Enquanto o treinador monta o plano de uma semana futura, as alterações ficam
+// só na memória — o salvamento de verdade é o botão "Confirmar plano". Só que o
+// app recebe atualizações do Firestore o tempo todo e, a cada uma, a lista de
+// alunos era recriada do zero a partir do servidor, apagando o plano em
+// construção. Com o aluno treinando, chega uma atualização dessas a cada série
+// que ele registra — o plano era apagado a cada poucos segundos.
+// Por isso as edições pendentes ficam guardadas aqui e são reaplicadas por cima
+// dos dados novos toda vez que algo chega do servidor.
+function clearPendingPlanEdit() {
+  pendingPlanEdit = null;
+}
+
+function reapplyPendingPlanEdit() {
+  if (!pendingPlanEdit) return;
+  const parentClient = clients.find((c) => c.id === pendingPlanEdit.clientId);
+  if (!parentClient) return; // aluno saiu da lista; mantém guardado
+  const plans = parentClient.weekPlans || [];
+  if (!plans.some((p) => p.id === pendingPlanEdit.planId)) {
+    // o plano não existe mais no servidor (foi ativado ou apagado) — descarta
+    pendingPlanEdit = null;
+    return;
+  }
+  parentClient.weekPlans = plans.map((p) =>
+    p.id === pendingPlanEdit.planId ? { ...p, days: pendingPlanEdit.days } : p
+  );
+}
+
 function updateDays(client, nextDays) {
   if (client.__planId) {
     // quando editando um plano, atualiza a cópia local (weekPlans) sem salvar no Firestore ainda
@@ -526,6 +559,7 @@ function updateDays(client, nextDays) {
         p.id === client.__planId ? { ...p, days: nextDays } : p
       );
       parentClient.weekPlans = nextPlans;
+      pendingPlanEdit = { clientId: client.id, planId: client.__planId, days: nextDays };
       ui.planUnsaved = true;
       render();
     }
@@ -536,7 +570,37 @@ function updateDays(client, nextDays) {
 
 // ---------- render ----------
 
+// Redesenhar a tela recria todos os campos do zero. Se isso acontecer no meio
+// de uma digitação, o campo perde o foco e o que estava sendo escrito se perde.
+// Atualizações vindas do servidor são frequentes (cada série que o aluno
+// registra gera uma), então quando há um campo em uso o redesenho fica na fila
+// e acontece assim que ele é liberado.
+function isTypingInApp() {
+  const ae = document.activeElement;
+  if (!ae) return false;
+  if (ae.tagName !== "INPUT" && ae.tagName !== "TEXTAREA") return false;
+  return !!ae.closest("#app");
+}
+
+function renderFromSync() {
+  if (isTypingInApp()) {
+    renderQueuedFromSync = true;
+    return;
+  }
+  render();
+}
+
+document.addEventListener("focusout", () => {
+  if (!renderQueuedFromSync) return;
+  // pequena espera: se o foco só pulou pra outro campo, continua na fila
+  setTimeout(() => {
+    if (!renderQueuedFromSync || isTypingInApp()) return;
+    render();
+  }, 150);
+});
+
 function render() {
+  renderQueuedFromSync = false;
   appEl.innerHTML = "";
   if (ui.view === "loading") { appEl.innerHTML = loadingHTML(); return; }
   if (ui.view === "gate") { appEl.innerHTML = gateHTML(); wireGate(); return; }
@@ -3151,6 +3215,7 @@ function wirePlanEdit(client, editable) {
       if (ui.planUnsaved && !confirm("Sair sem confirmar as alterações? As mudanças serão perdidas.")) return;
       ui.planWeekKey = null;
       ui.planUnsaved = false;
+      clearPendingPlanEdit();
       ui.planSavedAt = null;
       ui.calendarOpen = true;
       render();
@@ -3171,6 +3236,7 @@ function wirePlanEdit(client, editable) {
       const hh = String(now.getHours()).padStart(2, "0");
       const mm = String(now.getMinutes()).padStart(2, "0");
       ui.planUnsaved = false;
+      clearPendingPlanEdit();
       ui.planSavedAt = `${hh}:${mm}`;
       render();
       setTimeout(() => { ui.planSavedAt = null; render(); }, 3000);
@@ -3185,6 +3251,7 @@ function wirePlanEdit(client, editable) {
       await saveClient(client.id, { days: plan.days, activeWeekKey: weekKeyOf(todayKey()), weekPlans: nextPlans });
       ui.planWeekKey = null;
       ui.planUnsaved = false;
+      clearPendingPlanEdit();
       ui.planSavedAt = null;
       ui.calendarOpen = false;
     };
@@ -3219,6 +3286,10 @@ function wirePlanEdit(client, editable) {
       });
       const nextPlans = (client.weekPlans || []).map((p) => (p.id === plan.id ? { ...p, days: updatedDays } : p));
       await saveClient(client.id, { weekPlans: nextPlans });
+      client.weekPlans = nextPlans;
+      // o rascunho em memória passa a ser essa versão — senão a próxima
+      // atualização do servidor reaplicaria os dias antigos por cima
+      pendingPlanEdit = { clientId: client.id, planId: plan.id, days: updatedDays };
       ui.planUnsaved = true;
       refreshBtn.textContent = "Atualizado!";
       setTimeout(() => { refreshBtn.innerHTML = `<i class="ti ti-refresh"></i> Atualizar referência com o treino atual`; }, 1500);
@@ -3233,6 +3304,7 @@ function wirePlanEdit(client, editable) {
       await saveClient(client.id, { weekPlans: nextPlans });
       ui.planWeekKey = null;
       ui.planUnsaved = false;
+      clearPendingPlanEdit();
       ui.planSavedAt = null;
       ui.calendarOpen = true;
     };
