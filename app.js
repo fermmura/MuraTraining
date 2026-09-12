@@ -262,7 +262,13 @@ function isTimerRunning(day) {
 // Quando `photoPairs` é passado, os exercícios que tinham foto entram na lista
 // como { from: idAntigo, to: idNovo } — quem chamou usa isso pra copiar as
 // fotos pros ids novos (veja `clonePhotosForNewIds`).
-function cloneDaysWithNewIds(days, resetDone = true, photoPairs = null) {
+// `carryGhost`: usado quando a cópia é a SEMANA SEGUINTE do mesmo aluno. O
+// "feito" sempre zera (semana nova começa do zero, e o contador de séries
+// feitas também), mas o número da última vez que ele realmente fez aquela
+// série fica guardado em `prevReps` — é o que aparece esmaecido ao fundo do
+// campo, como referência. Se a série não foi feita na semana que passou, a
+// referência anterior continua valendo (sempre o ÚLTIMO treino feito).
+function cloneDaysWithNewIds(days, resetDone = true, photoPairs = null, carryGhost = false) {
   return (days || []).map((d) => {
     // `timerStartedAt` é estado da SESSÃO daquele dia, não faz parte do treino —
     // se ele viajar junto pra uma cópia/semana nova, o treino nasce já marcado
@@ -283,7 +289,10 @@ function cloneDaysWithNewIds(days, resetDone = true, photoPairs = null) {
           ...rest,
           id: newExId,
           ...(hadPhoto && photoPairs ? { hasPhoto: true } : {}),
-          sets: (ex.sets || []).map((s) => ({ ...s, id: uid(), repsDone: resetDone ? "" : s.repsDone })),
+          sets: (ex.sets || []).map((s) => {
+            if (!carryGhost) return { ...s, id: uid(), repsDone: resetDone ? "" : s.repsDone };
+            return { ...s, id: uid(), repsDone: "", prevReps: s.repsDone || s.prevReps || "" };
+          }),
         };
       }),
     };
@@ -1365,13 +1374,14 @@ function exerciseHTML(ex, editable, index, total, client) {
         <div>
           <label style="font-size:11px;font-weight:700;color:var(--muted);">SÉRIES DE TRABALHO</label>
           ${(ex.sets || []).map((s, i) => {
-            let refReps = "";
-            let isHistorical = false;
-            if (client && client.__planId && ui.planWeekKey) {
+            // referência = o "feito" da última vez que o aluno realmente fez
+            // essa série. Fica gravado na própria série quando a semana é
+            // copiada; em fichas antigas (sem esse campo) cai no histórico.
+            let refReps = s.prevReps || "";
+            if (!refReps && client && client.__planId && ui.planWeekKey) {
               refReps = getPreviousWeekSetRef(client, ui.planWeekKey, ex.name, i);
-              if (refReps) isHistorical = true; // marca se tem valor histórico
             }
-            return setRowHTML(ex.id, s, i, editable, refReps, isHistorical);
+            return setRowHTML(ex.id, s, i, editable, refReps);
           }).join("")}
           ${editable ? `<button class="dashed-btn" data-addset="${ex.id}" style="margin-top:6px;">+ série</button>` : ""}
           ${studentNoteHTML(ex)}
@@ -1380,12 +1390,15 @@ function exerciseHTML(ex, editable, index, total, client) {
     </div>`;
 }
 
-function setRowHTML(exId, s, i, editable, refReps = "", isHistorical = false) {
+function setRowHTML(exId, s, i, editable, refReps = "") {
   const goal = s.repsGoal ?? s.reps ?? ""; // compatível com fichas antigas (campo único "reps")
   const rirOn = !!s.rirEnabled;
-  const feitoPlaceholder = refReps ? refReps : "0"; // mostra o "feito" da semana passada como placeholder
-  const feitoValue = isHistorical && !editable ? "0" : (s.repsDone || ""); // aluno vê "0" para valores históricos
-  const inputStyle = isHistorical && editable ? "opacity:0.5;" : ""; // 50% de transparência para valores históricos em modo edição
+  const feitoValue = s.repsDone || "";
+  // enquanto a série não foi feita NESTA semana, o número da última vez que o
+  // aluno fez aparece esmaecido ao fundo, só como referência — ele não conta
+  // como série feita e some no instante em que o número novo é digitado
+  const ghost = !feitoValue && refReps ? refReps : "";
+  const feitoPlaceholder = ghost || "0";
   return `
     <div class="set-row" data-setid="${s.id}" data-exid="${exId}">
       <span class="set-idx">${i + 1}ª</span>
@@ -1396,8 +1409,8 @@ function setRowHTML(exId, s, i, editable, refReps = "", isHistorical = false) {
       <span class="stack" style="color:var(--chalk);position:relative;">
         ${
           editable
-            ? `<span class="box" style="${inputStyle}"><input data-field="repsDone" data-grow="1" value="${attr(s.repsDone)}" placeholder="${attr(feitoPlaceholder)}" /></span>`
-            : `<button type="button" class="box feito-open" data-feitoopen="1">${escapeHTML(feitoValue || "–")}</button>`
+            ? `<span class="box"><input class="${ghost ? "ghost-ref" : ""}" data-field="repsDone" data-grow="1" value="${attr(feitoValue)}" placeholder="${attr(feitoPlaceholder)}" /></span>`
+            : `<button type="button" class="box feito-open${ghost ? " ghost-ref" : ""}" data-feitoopen="1">${escapeHTML(feitoValue || ghost || "–")}</button>`
         }
         <span class="unit">feito</span>
       </span>
@@ -2778,7 +2791,8 @@ function wireCalendar(client, editable) {
         // as fotos dos exercícios precisam ser copiadas pros ids novos, senão
         // elas somem da semana seguinte
         const photoPairs = [];
-        let planDays = cloneDaysWithNewIds(client.days || [], false, photoPairs);
+        // semana nova: zera o "feito" e leva o número da última vez como referência
+        let planDays = cloneDaysWithNewIds(client.days || [], true, photoPairs, true);
         planDays = await clonePhotosForNewIds(client.id, planDays, photoPairs);
         plan = { id: uid(), weekKey: wk, days: planDays };
         const nextPlans = [...plans, plan];
@@ -3121,7 +3135,7 @@ function planEditHTML(client, editable) {
           </div>
           <div style="display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap;">
             <button class="dashed-btn" id="plan-activate"><i class="ti ti-check"></i> Ativar essa semana agora</button>
-            <button class="dashed-btn" id="plan-refresh"><i class="ti ti-refresh"></i> Atualizar "feito" com o treino atual</button>
+            <button class="dashed-btn" id="plan-refresh"><i class="ti ti-refresh"></i> Atualizar referência com o treino atual</button>
             <button class="dashed-btn" id="plan-delete"><i class="ti ti-trash"></i> Apagar plano</button>
           </div>`
         : ""
@@ -3193,7 +3207,11 @@ function wirePlanEdit(client, editable) {
               ...ex,
               sets: (ex.sets || []).map((s, si) => {
                 const curSet = curEx.sets && curEx.sets[si];
-                return curSet ? { ...s, repsDone: curSet.repsDone } : s;
+                if (!curSet) return s;
+                // o número da semana atual entra como REFERÊNCIA (esmaecido ao
+                // fundo), não como série já feita — a semana do plano continua
+                // zerada até o aluno treinar
+                return { ...s, repsDone: "", prevReps: curSet.repsDone || s.prevReps || "" };
               }),
             };
           }),
@@ -3203,7 +3221,7 @@ function wirePlanEdit(client, editable) {
       await saveClient(client.id, { weekPlans: nextPlans });
       ui.planUnsaved = true;
       refreshBtn.textContent = "Atualizado!";
-      setTimeout(() => { refreshBtn.innerHTML = `<i class="ti ti-refresh"></i> Atualizar "feito" com o treino atual`; }, 1500);
+      setTimeout(() => { refreshBtn.innerHTML = `<i class="ti ti-refresh"></i> Atualizar referência com o treino atual`; }, 1500);
       render();
     };
   }
@@ -3228,7 +3246,9 @@ function wirePlanEdit(client, editable) {
 function growBox(input) {
   const box = input.closest(".box");
   if (!box) return;
-  const len = (input.value || "").length;
+  // quando o campo está vazio, o número de referência (placeholder) é o que
+  // aparece — a caixa precisa caber ele também
+  const len = (input.value || input.placeholder || "").length;
   box.style.width = Math.max(30, len * 11 + 22) + "px";
 }
 

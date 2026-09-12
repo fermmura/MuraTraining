@@ -151,6 +151,10 @@
   .box input { width: 100%; text-align: center; font-size: 16px; }
   .box input[readonly] { color: var(--muted); }
   .box.feito-open { color: var(--chalk); font-size: 16px; }
+  /* número da última vez que o aluno fez a série: fica ao fundo, bem apagado,
+     só como referência — não é um valor registrado nesta semana */
+  .box input.ghost-ref::placeholder { color: var(--chalk); opacity: .3; }
+  .box.feito-open.ghost-ref { color: var(--chalk); opacity: .3; }
   .unit { font-size: 11px; color: var(--muted); white-space: nowrap; letter-spacing: .02em; line-height: 1; }
   .rm-x { color: var(--muted); flex-shrink: 0; font-size: 16px; padding: 4px; }
 
