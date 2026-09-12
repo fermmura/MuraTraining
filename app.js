@@ -247,23 +247,72 @@ async function createStudent(name, email, password, copyDaysFrom) {
   });
 }
 
-// clona os dias de treino de outro aluno, gerando ids novos pra tudo
-// (dias, exercícios e séries), sem carregar nenhum histórico/progresso junto
-function cloneDaysWithNewIds(days, resetDone = true) {
-  return (days || []).map((d) => ({
+// um cronômetro de treino nunca dura mais que algumas horas. Se sobrou um
+// `timerStartedAt` antigo (ex.: o app fechou no meio do treino, ou o campo veio
+// junto numa cópia de semana), ele não pode continuar aparecendo como "em
+// andamento" pra sempre — depois desse limite tratamos como treino não iniciado.
+const MAX_WORKOUT_MS = 6 * 60 * 60 * 1000; // 6 horas
+function isTimerRunning(day) {
+  if (!day || !day.timerStartedAt) return false;
+  return Date.now() - day.timerStartedAt < MAX_WORKOUT_MS;
+}
+
+// clona os dias de treino, gerando ids novos pra tudo (dias, exercícios e
+// séries), sem carregar nenhum histórico/progresso junto.
+// Quando `photoPairs` é passado, os exercícios que tinham foto entram na lista
+// como { from: idAntigo, to: idNovo } — quem chamou usa isso pra copiar as
+// fotos pros ids novos (veja `clonePhotosForNewIds`).
+function cloneDaysWithNewIds(days, resetDone = true, photoPairs = null) {
+  return (days || []).map((d) => {
+    // `timerStartedAt` é estado da SESSÃO daquele dia, não faz parte do treino —
+    // se ele viajar junto pra uma cópia/semana nova, o treino nasce já marcado
+    // como "em andamento", com o cronômetro contando desde outro dia.
+    const { timerStartedAt, ...dayRest } = d;
+    return {
+      ...dayRest,
+      id: uid(),
+      exercises: (d.exercises || []).map((ex) => {
+        // a foto fica numa subcoleção à parte, indexada pelo id do exercício.
+        // Como aqui geramos um id novo, a foto precisa ser COPIADA pro id novo —
+        // senão ela some da semana seguinte.
+        const { photoUrl, hasPhoto, ...rest } = ex;
+        const newExId = uid();
+        const hadPhoto = !!(photoUrl || hasPhoto);
+        if (hadPhoto && photoPairs) photoPairs.push({ from: ex.id, to: newExId });
+        return {
+          ...rest,
+          id: newExId,
+          ...(hadPhoto && photoPairs ? { hasPhoto: true } : {}),
+          sets: (ex.sets || []).map((s) => ({ ...s, id: uid(), repsDone: resetDone ? "" : s.repsDone })),
+        };
+      }),
+    };
+  });
+}
+
+// copia de verdade as fotos pros ids novos gerados pelo clone acima.
+// Devolve os dias já ajustados: se alguma foto não puder ser copiada, a flag
+// `hasPhoto` é removida daquele exercício, pra não ficar um quadro quebrado.
+async function clonePhotosForNewIds(clientId, clonedDays, photoPairs) {
+  if (!photoPairs || photoPairs.length === 0) return clonedDays;
+  const copied = new Set();
+  for (const pair of photoPairs) {
+    try {
+      const dataUrl = await loadPhoto(clientId, pair.from);
+      if (dataUrl) {
+        await savePhoto(clientId, pair.to, dataUrl);
+        copied.add(pair.to);
+      }
+    } catch (e) {
+      // sem internet ou foto perdida — segue sem ela
+    }
+  }
+  return clonedDays.map((d) => ({
     ...d,
-    id: uid(),
     exercises: (d.exercises || []).map((ex) => {
-      // a foto (quando existe) fica guardada numa subcoleção à parte, indexada
-      // pelo id ANTIGO do exercício — como aqui geramos um id novo, não dá pra
-      // levar a foto junto (ela ficaria "órfã"). Por isso o exercício clonado
-      // sempre começa sem foto.
-      const { photoUrl, hasPhoto, ...rest } = ex;
-      return {
-        ...rest,
-        id: uid(),
-        sets: (ex.sets || []).map((s) => ({ ...s, id: uid(), repsDone: resetDone ? "" : s.repsDone })),
-      };
+      if (!ex.hasPhoto || copied.has(ex.id)) return ex;
+      const { hasPhoto, ...rest } = ex;
+      return rest;
     }),
   }));
 }
@@ -286,7 +335,13 @@ async function maybePromoteWeek(client) {
   try {
     if (plan) {
       const nextPlans = plans.filter((p) => p.id !== plan.id);
-      await saveClient(client.id, { days: plan.days, activeWeekKey: currentKey, weekPlans: nextPlans });
+      // limpeza: planos salvos antes da correção podem ter vindo com o
+      // cronômetro de outro dia colado neles. A semana nova sempre começa parada.
+      const freshDays = (plan.days || []).map((d) => {
+        const { timerStartedAt, ...rest } = d;
+        return rest;
+      });
+      await saveClient(client.id, { days: freshDays, activeWeekKey: currentKey, weekPlans: nextPlans });
     } else {
       await saveClient(client.id, { activeWeekKey: currentKey });
     }
@@ -1097,7 +1152,7 @@ function clientAreaHTMLInner(client, editable) {
               <button class="dashed-btn" id="open-cardio"><i class="ti ti-heart-rate-monitor"></i> Cardio</button>
               <button class="dashed-btn" id="open-progression"><i class="ti ti-chart-line"></i> Progressão</button>
               ${editable ? `<button class="dashed-btn" id="open-muscle"><i class="ti ti-chart-donut-3"></i> Volume muscular</button>` : ""}
-              <button class="dashed-btn" id="open-feedback"><i class="ti ti-message-circle"></i> Feedbacks</button>
+              <button class="dashed-btn" id="open-feedback" style="position:relative;"><i class="ti ti-message-circle"></i> Feedbacks${(client.feedback || []).some(f => !f.read) ? '<span style="position:absolute;top:-4px;right:-4px;width:12px;height:12px;background:var(--red);border-radius:50%;border:2px solid var(--panel);box-shadow:0 0 6px var(--red);"></span>' : ''}</button>
             </div>`
           : ""
       }
@@ -1121,7 +1176,7 @@ function clientAreaHTMLInner(client, editable) {
           .map((d, dayIdx, dayArr) => {
             const vol = dayVolume(d);
             const lastSession = [...(client.workoutSessions || [])].filter((s) => s.dayId === d.id).sort((a, b) => b.endedAt - a.endedAt)[0];
-            const sessionLine = d.timerStartedAt
+            const sessionLine = isTimerRunning(d)
               ? `<div class="count" style="color:var(--red);display:flex;align-items:center;gap:3px;"><i class="ti ti-player-play" style="font-size:10px;"></i> em andamento</div>`
               : lastSession && lastSession.dateKey === todayKey()
               ? `<div class="count" style="color:var(--steel);display:flex;align-items:center;gap:3px;"><i class="ti ti-clock" style="font-size:10px;"></i> ${lastSession.durationMin}min hoje</div>`
@@ -1184,7 +1239,7 @@ function clientAreaHTMLInner(client, editable) {
       })()
     }
     ${
-      !day.timerStartedAt
+      !isTimerRunning(day)
         ? `<button type="button" class="cta" id="start-workout" style="display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:14px;">
             <i class="ti ti-player-play"></i> INICIAR TREINO
           </button>`
@@ -1195,7 +1250,7 @@ function clientAreaHTMLInner(client, editable) {
     </div>
     ${editable ? `<button class="dashed-btn" id="add-exercise">+ adicionar exercício</button>` : ""}
     ${
-      day.timerStartedAt
+      isTimerRunning(day)
         ? `<div style="background:#2A2018;border:1px solid var(--red);border-radius:10px;padding:14px;text-align:center;margin-top:14px;">
             <div style="font-size:10px;color:#FF7A6E;letter-spacing:.05em;margin-bottom:4px;">TREINO EM ANDAMENTO</div>
             <div class="display" id="workout-timer-display" data-started="${day.timerStartedAt}" style="font-size:28px;color:var(--chalk);margin-bottom:10px;">00:00</div>
@@ -1458,6 +1513,12 @@ function wireClientAreaInner(client, editable) {
   const openFeedbackBtn = document.getElementById("open-feedback");
   if (openFeedbackBtn) {
     openFeedbackBtn.onclick = () => {
+      // Mark all feedbacks as read when opening
+      const hasUnread = (client.feedback || []).some(f => !f.read);
+      if (hasUnread) {
+        const updated = (client.feedback || []).map(f => ({ ...f, read: true }));
+        saveClient(client.id, { feedback: updated });
+      }
       ui.feedbackOpen = true;
       render();
     };
@@ -1564,6 +1625,12 @@ function wireClientAreaInner(client, editable) {
   const startBtn = el("start-workout");
   if (startBtn) {
     startBtn.onclick = async () => {
+      // dentro de um PLANO de semana futura, `client.days` são os dias do plano.
+      // Salvar daqui sobrescreveria o treino atual do aluno com o plano inteiro.
+      if (client.__planId) {
+        alert("O cronômetro só funciona na semana atual — esse é um plano de uma semana futura.");
+        return;
+      }
       const day = (client.days || []).find((d) => d.id === ui.activeDayId);
       if (!day) return;
       if (!confirm(`Iniciar o cronômetro de "${day.title}" agora?`)) return;
@@ -1575,12 +1642,18 @@ function wireClientAreaInner(client, editable) {
   const finishBtn = el("finish-workout");
   if (finishBtn) {
     finishBtn.onclick = async () => {
+      if (client.__planId) return; // mesmo motivo do botão de iniciar
       const day = (client.days || []).find((d) => d.id === ui.activeDayId);
       if (!day || !day.timerStartedAt) return;
       if (!confirm(`Finalizar "${day.title}" agora? Isso para o cronômetro e registra a duração.`)) return;
       const startedAt = day.timerStartedAt;
       const endedAt = Date.now();
-      const durationMin = Math.max(1, Math.round((endedAt - startedAt) / 60000));
+      // trava de segurança: se o cronômetro ficou esquecido aberto, não registra
+      // uma sessão de 14 horas — limita ao máximo plausível de um treino
+      const durationMin = Math.min(
+        Math.round(MAX_WORKOUT_MS / 60000),
+        Math.max(1, Math.round((endedAt - startedAt) / 60000))
+      );
       const session = { id: uid(), dayId: day.id, dayTitle: day.title, startedAt, endedAt, durationMin, dateKey: todayKey(), weekKey: weekKeyOf(todayKey()) };
       const nextDays = (client.days || []).map((d) => (d.id === day.id ? { ...d, timerStartedAt: null } : d));
       const nextSessions = [...(client.workoutSessions || []), session];
@@ -2702,7 +2775,12 @@ function wireCalendar(client, editable) {
       const plans = client.weekPlans || [];
       let plan = plans.find((p) => p.weekKey === wk);
       if (!plan && editable) {
-        plan = { id: uid(), weekKey: wk, days: cloneDaysWithNewIds(client.days || [], false) };
+        // as fotos dos exercícios precisam ser copiadas pros ids novos, senão
+        // elas somem da semana seguinte
+        const photoPairs = [];
+        let planDays = cloneDaysWithNewIds(client.days || [], false, photoPairs);
+        planDays = await clonePhotosForNewIds(client.id, planDays, photoPairs);
+        plan = { id: uid(), weekKey: wk, days: planDays };
         const nextPlans = [...plans, plan];
         await saveClient(client.id, { weekPlans: nextPlans, activeWeekKey: activeKey });
       }
@@ -2908,7 +2986,7 @@ function wireFeedback(client, editable) {
       const textEl = el("feedback-text");
       const text = textEl.value.trim();
       if (!text) return;
-      const entry = { id: uid(), dateKey: todayKey(), from: who, text };
+      const entry = { id: uid(), dateKey: todayKey(), from: who, text, read: false };
       const next = [...(client.feedback || []), entry];
       saveClient(client.id, { feedback: next });
       textEl.value = "";
