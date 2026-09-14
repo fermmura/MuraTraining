@@ -65,7 +65,7 @@ let ui = { view: "loading", selectedId: null, activeDayId: null, progOpen: false
 let draggedDayId = null;
 let pendingPlanEdit = null; // rascunho do plano de semana futura em edição { clientId, planId, days }
 let renderQueuedFromSync = false; // redesenho adiado porque havia um campo em uso
-let lastDoneIndexCache = { key: "", map: new Map() }; // refeito a cada desenho da tela
+let weekRefsCache = null; // refeito a cada desenho da tela
 let collapsedEx = {}; // exercícios minimizados; por padrão, todo exercício começa minimizado
 let openNotes = {}; // observações do aluno abertas manualmente nessa sessão
 const isCollapsed = (exId) => collapsedEx[exId] !== false;
@@ -93,6 +93,8 @@ auth.onAuthStateChanged((user) => {
         // memória — reaplica ele por cima dos dados que acabaram de chegar,
         // senão cada série que o aluno registra apaga o planejamento em curso
         reapplyPendingPlanEdit();
+        // o mesmo vale pro que o treinador acabou de digitar numa série
+        reapplyPendingSetEdits();
         clients.forEach((c) => maybePromoteWeek(c));
         renderFromSync();
       },
@@ -106,6 +108,9 @@ auth.onAuthStateChanged((user) => {
       .onSnapshot(
         (snap) => {
           myClient = snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() };
+          // o que o aluno acabou de registrar não pode piscar de volta pro
+          // valor antigo enquanto a escrita está a caminho do servidor
+          reapplyPendingSetEdits();
           if (myClient) {
             maybePromoteWeek(myClient);
             if (!lastSeenRecorded) {
@@ -342,7 +347,7 @@ const promotedThisSession = new Set();
 // cargas de referência — sem isso o treinador vê 42,5 no planejamento e o aluno
 // recebe os 40 que vieram da cópia.
 function withRefLoads(client, planDays, planWeekKey) {
-  const idx = lastDoneIndex(client, planWeekKey);
+  const idx = weekRefs(client, planWeekKey).lastDone;
   if (!idx.size) return planDays;
   return (planDays || []).map((d) => ({
     ...d,
@@ -357,9 +362,47 @@ function withRefLoads(client, planDays, planWeekKey) {
   }));
 }
 
+// zera o "feito" da semana que acabou, guardando o número como referência.
+// Usado quando a semana vira SEM um plano pronto: nesse caminho os dias
+// continuam sendo os mesmos, e sem isso o treino novo nasce com tudo já
+// marcado como feito. Séries registradas na semana que está começando são
+// preservadas (o aluno pode ter treinado antes de alguém abrir o app).
+function withDoneReset(client, days, newWeekKey) {
+  const refs = weekRefs(client, newWeekKey);
+  return (days || []).map((d) => {
+    const { timerStartedAt, ...rest } = d;
+    return {
+      ...rest,
+      exercises: (d.exercises || []).map((ex) => ({
+        ...ex,
+        sets: (ex.sets || []).map((s) => {
+          // só preserva quem tem REPETIÇÃO registrada na semana que começa.
+          // Usar "mexeu em qualquer campo" deixaria o "feito" da semana passada
+          // congelado numa série em que só a carga foi ajustada.
+          if (refs.hasHistory && refs.touchedReps.has(s.id)) return s;
+          return { ...s, repsDone: "", prevReps: s.repsDone || s.prevReps || "" };
+        }),
+      })),
+    };
+  });
+}
+
 async function maybePromoteWeek(client) {
   const currentKey = weekKeyOf(todayKey());
-  const activeKey = client.activeWeekKey || currentKey;
+  // Ficha sem `activeWeekKey` (aluno criado direto, sem nunca ter aberto uma
+  // semana futura no calendário) caía no atalho `|| currentKey` e a comparação
+  // abaixo dava sempre igual: a semana NUNCA virava, e os números ficavam
+  // parados ali para sempre. Carimba a semana de hoje pra que a próxima virada
+  // aconteça; os dias não são tocados, quem arruma a tela é a referência.
+  if (!client.activeWeekKey) {
+    const flag = client.id + ":init";
+    if (!promotedThisSession.has(flag)) {
+      promotedThisSession.add(flag);
+      saveClient(client.id, { activeWeekKey: currentKey });
+    }
+    return;
+  }
+  const activeKey = client.activeWeekKey;
   if (currentKey === activeKey) return;
   if (currentKey < activeKey) return; // segurança: nunca "volta" a semana
   const sessionFlag = client.id + ":" + currentKey;
@@ -379,7 +422,14 @@ async function maybePromoteWeek(client) {
       });
       await saveClient(client.id, { days: freshDays, activeWeekKey: currentKey, weekPlans: nextPlans });
     } else {
-      await saveClient(client.id, { activeWeekKey: currentKey });
+      // Sem plano pronto pra semana nova, o app só trocava a etiqueta da semana
+      // e os dias continuavam intactos — com o "feito" da semana passada colado
+      // neles. A semana "nova" era a velha com outro nome: contador de séries
+      // cheio, nenhuma referência aparecendo, e o aluno abrindo um treino que
+      // parecia já realizado. Agora ela começa limpa, com os números da semana
+      // anterior virando referência e as cargas vindo do último treino.
+      const freshDays = withDoneReset(client, withRefLoads(client, client.days, currentKey), currentKey);
+      await saveClient(client.id, { days: freshDays, activeWeekKey: currentKey });
     }
   } catch (e) {
     promotedThisSession.delete(sessionFlag); // libera pra tentar de novo depois
@@ -452,6 +502,119 @@ function handleSyncError(e) {
     alert("Erro ao sincronizar com o servidor: " + e.message + "\n\nTente recarregar a página.");
   }
   syncErrorShown = false;
+}
+
+// ---------- proteção das edições recentes ----------
+//
+// Toda alteração salva o array `days` INTEIRO de volta no documento do aluno.
+// Se o treinador e o aluno mexerem quase ao mesmo tempo, os dois enviam a sua
+// versão completa e a última apaga a outra — é isso que faz o número "voltar
+// sozinho" para o que era antes, e é por isso que só acontece com o aluno
+// treinando.
+//
+// A defesa tem duas partes:
+//   1. a escrita passa a ser uma transação, que relê a versão mais nova do
+//      servidor e aplica a alteração em cima dela. Se alguém escreveu no meio,
+//      o Firestore repete sozinho — ninguém apaga ninguém
+//   2. enquanto a escrita está em trânsito, a alteração fica guardada aqui e é
+//      reaplicada por cima de tudo que chega do servidor, senão a tela pisca de
+//      volta para o valor antigo antes da confirmação
+const pendingSetEdits = new Map(); // "aluno|série|campo" -> alteração recente
+const PENDING_EDIT_MS = 10000;
+
+function rememberSetEdit(clientId, setId, field, value) {
+  pendingSetEdits.set(clientId + "|" + setId + "|" + field, { clientId, setId, field, value, at: Date.now() });
+}
+
+function clientById(id) {
+  return clients.find((x) => x.id === id) || (myClient && myClient.id === id ? myClient : null);
+}
+
+function hasPendingEdit(clientId, setId) {
+  for (const e of pendingSetEdits.values()) {
+    if (e.clientId === clientId && e.setId === setId) return true;
+  }
+  return false;
+}
+
+function findSetInDays(days, setId) {
+  for (const d of days || []) {
+    for (const ex of d.exercises || []) {
+      for (const s of ex.sets || []) if (s.id === setId) return s;
+    }
+  }
+  return null;
+}
+
+function reapplyPendingSetEdits() {
+  if (!pendingSetEdits.size) return;
+  const now = Date.now();
+  const bySetByClient = new Map();
+  for (const [k, e] of pendingSetEdits) {
+    if (now - e.at > PENDING_EDIT_MS) { pendingSetEdits.delete(k); continue; }
+    // o servidor já devolveu esse valor: a alteração chegou e pode ser
+    // esquecida. Guardar por mais tempo do que o necessário é perigoso — uma
+    // gravação seguinte levaria esse valor velho junto e desfaria a correção
+    // que a outra pessoa fez nesse meio tempo.
+    const c0 = clientById(e.clientId);
+    const s0 = c0 && findSetInDays(c0.days, e.setId);
+    if (s0 && (s0[e.field] || "") === (e.value || "")) { pendingSetEdits.delete(k); continue; }
+    if (!bySetByClient.has(e.clientId)) bySetByClient.set(e.clientId, new Map());
+    const bySet = bySetByClient.get(e.clientId);
+    if (!bySet.has(e.setId)) bySet.set(e.setId, {});
+    bySet.get(e.setId)[e.field] = e.value;
+  }
+  for (const [clientId, bySet] of bySetByClient) {
+    const c = clientById(clientId);
+    if (!c) continue;
+    c.days = (c.days || []).map((d) => ({
+      ...d,
+      exercises: (d.exercises || []).map((ex) => ({
+        ...ex,
+        sets: (ex.sets || []).map((s) => (bySet.has(s.id) ? { ...s, ...bySet.get(s.id) } : s)),
+      })),
+    }));
+  }
+}
+
+// grava a alteração de uma série relendo antes a versão mais nova do servidor,
+// para não apagar o que a outra pessoa acabou de registrar
+const TX_TIMEOUT_MS = 12000;
+
+async function saveSetFieldSafely(clientId, dayId, exId, setId, field, value, fallback) {
+  // Transação exige conexão: ela não é guardada para depois como uma escrita
+  // comum. Sem internet — ou com internet ruim, que é a regra dentro de
+  // academia — o que importa é não perder o registro do aluno, então vai pelo
+  // caminho normal, que o Firestore guarda no aparelho e envia sozinho quando
+  // a conexão voltar.
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    await saveClient(clientId, fallback);
+    return;
+  }
+  const ref = db.collection("clients").doc(clientId);
+  const tx = db.runTransaction(async (t) => {
+    const snap = await t.get(ref);
+    if (!snap.exists) throw new Error("ficha não encontrada");
+    const fresh = { id: clientId, ...snap.data() };
+    const out = applySetFieldChange(fresh, dayId, exId, setId, field, value);
+    t.update(ref, { days: out.days, history: out.history });
+  });
+  try {
+    await Promise.race([
+      tx,
+      new Promise((_, rej) => setTimeout(() => rej(new Error("demorou demais")), TX_TIMEOUT_MS)),
+    ]);
+  } catch (e) {
+    // A transação não voltou a tempo (ou falhou). Grava do jeito normal pra
+    // alteração não se perder — mas refazendo a conta a partir do estado mais
+    // recente que chegou do servidor, e não do retrato de quando a digitação
+    // aconteceu: gravar o retrato velho apagaria o que a outra pessoa
+    // registrou nesse meio tempo, que é justamente o problema original.
+    tx.catch(() => {});
+    const cur = clientById(clientId);
+    const fresh = cur ? applySetFieldChange(cur, dayId, exId, setId, field, value) : fallback;
+    await saveClient(clientId, fresh);
+  }
 }
 
 function saveClient(id, patch) {
@@ -680,10 +843,10 @@ document.addEventListener("focusout", () => {
 
 function render() {
   renderQueuedFromSync = false;
-  // o índice do último treino vale só para este desenho: se o aluno corrigir
-  // uma série já registrada, o histórico muda de conteúdo sem mudar de tamanho,
-  // e um cache que sobrevivesse ao redesenho mostraria o número velho
-  lastDoneIndexCache = { key: "", map: new Map() };
+  // o índice vale só para este desenho: quando o aluno corrige uma série já
+  // registrada, o histórico muda de conteúdo sem mudar de tamanho, e um cache
+  // que sobrevivesse ao redesenho mostraria o número velho
+  weekRefsCache = null;
   appEl.innerHTML = "";
   if (ui.view === "loading") { appEl.innerHTML = loadingHTML(); return; }
   if (ui.view === "gate") { appEl.innerHTML = gateHTML(); wireGate(); return; }
@@ -1168,12 +1331,14 @@ function startWorkoutClock() {
   workoutClockInterval = setInterval(tick, 1000);
 }
 
-function dayVolume(day) {
+// conta só o que foi feito NESTA semana — o "feito" da semana passada continua
+// gravado nos dias até a virada, e sem isso o contador nasce cheio
+function dayVolume(client, day) {
   let total = 0, done = 0;
   for (const ex of day.exercises || []) {
     for (const s of ex.sets || []) {
       total++;
-      if (s.repsDone) done++;
+      if (setDone(client, s)) done++;
     }
   }
   return { done, total };
@@ -1261,12 +1426,13 @@ function addMuscleCount(byMuscle, muscle, weight, done) {
   if (done) byMuscle[muscle].done += weight;
 }
 
-function muscleVolume(day) {
+function muscleVolume(client, day) {
   const byMuscle = {};
   for (const ex of day.exercises || []) {
     for (const s of ex.sets || []) {
-      addMuscleCount(byMuscle, ex.muscle, 1, !!s.repsDone);
-      addMuscleCount(byMuscle, ex.synergist, 0.5, !!s.repsDone);
+      const done = setDone(client, s);
+      addMuscleCount(byMuscle, ex.muscle, 1, done);
+      addMuscleCount(byMuscle, ex.synergist, 0.5, done);
     }
   }
   return Object.entries(byMuscle).sort((a, b) => b[1].total - a[1].total);
@@ -1277,8 +1443,9 @@ function clientMuscleVolume(client) {
   for (const day of client.days || []) {
     for (const ex of day.exercises || []) {
       for (const s of ex.sets || []) {
-        addMuscleCount(byMuscle, ex.muscle, 1, !!s.repsDone);
-        addMuscleCount(byMuscle, ex.synergist, 0.5, !!s.repsDone);
+        const done = setDone(client, s);
+        addMuscleCount(byMuscle, ex.muscle, 1, done);
+        addMuscleCount(byMuscle, ex.synergist, 0.5, done);
       }
     }
   }
@@ -1330,7 +1497,7 @@ function clientAreaHTMLInner(client, editable) {
       <div class="grid ${editable ? "" : "stacked"}">
         ${(client.days || [])
           .map((d, dayIdx, dayArr) => {
-            const vol = dayVolume(d);
+            const vol = dayVolume(client, d);
             const lastSession = [...(client.workoutSessions || [])].filter((s) => s.dayId === d.id).sort((a, b) => b.endedAt - a.endedAt)[0];
             const sessionLine = isTimerRunning(d)
               ? `<div class="count" style="color:var(--red);display:flex;align-items:center;gap:3px;"><i class="ti ti-player-play" style="font-size:10px;"></i> em andamento</div>`
@@ -1376,9 +1543,9 @@ function clientAreaHTMLInner(client, editable) {
     </div>
     ${
       (() => {
-        const vol = dayVolume(day);
+        const vol = dayVolume(client, day);
         if (vol.total === 0) return "";
-        const byMuscle = muscleVolume(day);
+        const byMuscle = muscleVolume(client, day);
         const totalLine = `<div class="muted-note" style="margin:-10px 0 8px; color:${vol.done === vol.total ? "#639922" : "var(--muted)"};">${vol.done}/${vol.total} séries feitas</div>`;
         const muscleLine =
           byMuscle.length > 0
@@ -1521,17 +1688,18 @@ function exerciseHTML(ex, editable, index, total, client) {
         <div>
           <label style="font-size:11px;font-weight:700;color:var(--muted);">SÉRIES DE TRABALHO</label>
           ${(ex.sets || []).map((s, i) => {
-            // referência = o "feito" da última vez que o aluno realmente fez
-            // essa série. O histórico manda, porque ele acompanha o que o aluno
-            // registra depois que o plano foi criado; `prevReps`, gravado na
-            // própria série quando a semana é copiada, fica de reserva.
+            // o número em `days` só vale como desta semana se a série foi
+            // registrada nela; senão é resquício da semana passada e o que
+            // aparece é a referência do último treino feito
             const ref = lastDoneRef(client, ex.name, i);
-            const refReps = (ref && ref.repsDone) || s.prevReps || "";
-            // a carga do último treino substitui a que veio da cópia — a não ser
-            // que o treinador tenha digitado uma carga aqui dentro do plano,
-            // que aí é prescrição e manda
-            const refLoad = ref && ref.load && !s.loadSetByTrainer ? ref.load : "";
-            return setRowHTML(ex.id, s, i, editable, refReps, (ex.sets || []).length, refLoad);
+            const fromThisWeek = isFromThisWeek(client, s);
+            const feitoValue = fromThisWeek ? s.repsDone || "" : "";
+            const refReps = feitoValue ? "" : (ref && ref.repsDone) || s.prevReps || "";
+            // a carga segue a mesma regra. Dentro do plano quem trava é a
+            // prescrição do treinador, porque ali nada é registrado no histórico
+            const loadIsMine = client.__planId ? !!s.loadSetByTrainer : fromThisWeek;
+            const refLoad = !loadIsMine && ref && ref.load ? ref.load : "";
+            return setRowHTML(ex.id, s, i, editable, refReps, (ex.sets || []).length, refLoad, feitoValue);
           }).join("")}
           ${editable ? `<button class="dashed-btn" data-addset="${ex.id}" style="margin-top:6px;">+ série</button>` : ""}
           ${studentNoteHTML(ex)}
@@ -1540,10 +1708,9 @@ function exerciseHTML(ex, editable, index, total, client) {
     </div>`;
 }
 
-function setRowHTML(exId, s, i, editable, refReps = "", total = 1, refLoad = "") {
+function setRowHTML(exId, s, i, editable, refReps = "", total = 1, refLoad = "", feitoValue = "") {
   const goal = s.repsGoal ?? s.reps ?? ""; // compatível com fichas antigas (campo único "reps")
   const rirOn = !!s.rirEnabled;
-  const feitoValue = s.repsDone || "";
   // enquanto a série não foi feita NESTA semana, o número da última vez que o
   // aluno fez aparece esmaecido ao fundo, só como referência — ele não conta
   // como série feita e some no instante em que o número novo é digitado
@@ -2165,37 +2332,76 @@ function addWeeks(weekKey, count) {
   return d.toISOString().slice(0, 10);
 }
 
-// Referência do último treino que o aluno REALMENTE fez daquele exercício.
-// Antes isso era procurado exatamente uma semana antes do plano, o que falhava
-// em dois casos comuns: planejar duas ou mais semanas à frente (procurava numa
-// semana que ainda nem aconteceu) e aluno que pulou uma semana. Agora vale a
-// última vez que ele fez, seja quando for.
-// O plano também não pode depender do instante em que foi criado: ele é uma
-// cópia da semana atual tirada no momento em que o treinador abre aquela
-// semana no calendário, então tudo que o aluno registrar DEPOIS disso ficava
-// de fora. Por isso a referência é procurada na hora de desenhar a tela.
+// ---------- o que é desta semana e o que é do último treino ----------
+//
+// A ficha guarda duas coisas diferentes:
+//   `days`    — o treino como está agora. NÃO tem carimbo de tempo.
+//   `history` — uma entrada por série, com data e semana, gravada toda vez que
+//               repetição ou carga mudam — tanto pelo aluno quanto pelo treinador.
+//
+// Como `days` não sabe de que semana são seus números, quando a semana vira os
+// valores da semana passada continuam ali como se fossem desta. Então a
+// pergunta "isto foi feito NESTA semana?" só o histórico responde, e é ele que
+// manda aqui.
+//
+// Para cada série a tela precisa de duas respostas:
+//   - foi registrada nesta semana? então o número em `days` é de verdade
+//   - senão, o que foi feito da última vez? é a referência, que aparece
+//     esmaecida no "feito" e preenche a carga
 
-function lastDoneIndex(client, beforeWeekKey) {
-  const hist = client.history || [];
-  const key = `${client.id}|${beforeWeekKey}`;
-  if (lastDoneIndexCache.key === key) return lastDoneIndexCache.map;
-  const map = new Map();
-  for (const h of hist) {
-    if (!h.exName) continue;
-    // só conta o que aconteceu ANTES da semana do plano
-    if (beforeWeekKey && h.weekKey && h.weekKey >= beforeWeekKey) continue;
-    if (!h.repsDone && !h.load) continue; // entrada sem nada registrado
-    const k = h.exName + "|" + h.setIndex;
-    const cur = map.get(k);
-    if (!cur || (h.dateKey || "") >= (cur.dateKey || "")) map.set(k, h);
-  }
-  lastDoneIndexCache = { key, map };
-  return map;
+function weekKeyInView(client) {
+  if (client.__planId && ui.planWeekKey) return ui.planWeekKey;
+  return client.activeWeekKey || weekKeyOf(todayKey());
 }
 
-function lastDoneRef(client, exName, setIndex) {
-  if (!client || !client.__planId || !ui.planWeekKey || !exName) return null;
-  return lastDoneIndex(client, ui.planWeekKey).get(exName + "|" + setIndex) || null;
+function weekRefs(client, weekKeyOverride) {
+  const weekKey = weekKeyOverride || weekKeyInView(client);
+  const key = client.id + "|" + weekKey;
+  if (weekRefsCache && weekRefsCache.key === key) return weekRefsCache;
+  const hist = client.history || [];
+  const touched = new Set(); // séries mexidas nesta semana (reps ou carga)
+  const touchedReps = new Set(); // séries com repetição registrada nesta semana
+  const lastDone = new Map(); // "exercício|posição" -> último registro anterior
+  for (const h of hist) {
+    if (!h.weekKey) continue;
+    if (h.weekKey === weekKey) {
+      if (h.setId) { touched.add(h.setId); if (h.repsDone) touchedReps.add(h.setId); }
+      continue;
+    }
+    if (h.weekKey > weekKey) continue; // semana posterior não serve de referência
+    if (!h.exName || (!h.repsDone && !h.load)) continue;
+    const k = h.exName + "|" + h.setIndex;
+    const cur = lastDone.get(k);
+    if (!cur || (h.dateKey || "") >= (cur.dateKey || "")) lastDone.set(k, h);
+  }
+  weekRefsCache = { key, weekKey, touched, touchedReps, lastDone, hasHistory: hist.length > 0 };
+  return weekRefsCache;
+}
+
+// O número gravado na série vale como sendo desta semana?
+// Fichas sem histórico nenhum (de antes de ele existir) ficam no critério
+// antigo — senão o treino delas apareceria todo zerado.
+function isFromThisWeek(client, s) {
+  if (!client || !s) return true;
+  if (client.__planId) return false; // plano: nada foi feito ali ainda
+  // o que acabou de ser digitado conta na hora: o histórico só volta do
+  // servidor alguns instantes depois, e sem isso o número recém-escrito seria
+  // trocado pela referência esmaecida no primeiro redesenho
+  if (hasPendingEdit(client.id, s.id)) return true;
+  const refs = weekRefs(client);
+  if (!refs.hasHistory) return true;
+  return refs.touched.has(s.id);
+}
+
+// série feita nesta semana — usado também pelos contadores, pra que tela e
+// número de séries feitas nunca discordem
+function setDone(client, s) {
+  return !!(s && s.repsDone) && isFromThisWeek(client, s);
+}
+
+function lastDoneRef(client, exName, setIndex, weekKeyOverride) {
+  if (!client || !exName) return null;
+  return weekRefs(client, weekKeyOverride).lastDone.get(exName + "|" + setIndex) || null;
 }
 
 // aplica a mudança de um campo (reps/kg/etc.) numa série e, se for reps/kg,
@@ -2274,7 +2480,15 @@ function saveSetField(client, dayId, exId, setId, field, value) {
     return;
   }
   const { days, history } = applySetFieldChange(client, dayId, exId, setId, field, value);
-  saveClient(client.id, { days, history });
+  // guarda a alteração e já aplica na cópia em memória, pra tela responder na
+  // hora; a gravação de verdade acontece logo abaixo, relendo o servidor
+  rememberSetEdit(client.id, setId, field, value);
+  const parent = clientById(client.id);
+  // o histórico local entra junto: é dele que sai o "esta série foi registrada
+  // nesta semana", e sem isso o número apareceria como não-feito até o
+  // servidor responder
+  if (parent) { parent.days = days; parent.history = history; }
+  saveSetFieldSafely(client.id, dayId, exId, setId, field, value, { days, history });
 }
 
 
@@ -2928,7 +3142,7 @@ function calendarHTML(client, editable) {
           const isPast = off < 0;
           const isCurrent = off === 0;
           const plan = plans.find((p) => p.weekKey === wk);
-          const vol = isCurrent ? dayVolume({ exercises: (client.days || []).flatMap((d) => d.exercises || []) }) : null;
+          const vol = isCurrent ? dayVolume(client, { exercises: (client.days || []).flatMap((d) => d.exercises || []) }) : null;
 
           let statusHTML = "";
           let icon = "ti-calendar";
