@@ -65,6 +65,7 @@ let ui = { view: "loading", selectedId: null, activeDayId: null, progOpen: false
 let draggedDayId = null;
 let pendingPlanEdit = null; // rascunho do plano de semana futura em edição { clientId, planId, days }
 let renderQueuedFromSync = false; // redesenho adiado porque havia um campo em uso
+let lastDoneIndexCache = { key: "", map: new Map() }; // refeito a cada desenho da tela
 let collapsedEx = {}; // exercícios minimizados; por padrão, todo exercício começa minimizado
 let openNotes = {}; // observações do aluno abertas manualmente nessa sessão
 const isCollapsed = (exId) => collapsedEx[exId] !== false;
@@ -336,6 +337,26 @@ async function clonePhotosForNewIds(clientId, clonedDays, photoPairs) {
 // pronto pra essa semana, promove ele automaticamente pra virar o treino atual —
 // sem precisar de nenhum clique do treinador
 const promotedThisSession = new Set();
+// A carga do último treino aparece na tela do plano, mas o que vale pro aluno é
+// o que está gravado. Antes de o plano virar a semana atual, grava nele as
+// cargas de referência — sem isso o treinador vê 42,5 no planejamento e o aluno
+// recebe os 40 que vieram da cópia.
+function withRefLoads(client, planDays, planWeekKey) {
+  const idx = lastDoneIndex(client, planWeekKey);
+  if (!idx.size) return planDays;
+  return (planDays || []).map((d) => ({
+    ...d,
+    exercises: (d.exercises || []).map((ex) => ({
+      ...ex,
+      sets: (ex.sets || []).map((s, i) => {
+        if (s.loadSetByTrainer) return s; // carga prescrita pelo treinador manda
+        const ref = idx.get((ex.name || "") + "|" + i);
+        return ref && ref.load ? { ...s, load: ref.load } : s;
+      }),
+    })),
+  }));
+}
+
 async function maybePromoteWeek(client) {
   const currentKey = weekKeyOf(todayKey());
   const activeKey = client.activeWeekKey || currentKey;
@@ -352,7 +373,7 @@ async function maybePromoteWeek(client) {
       const nextPlans = plans.filter((p) => p.id !== plan.id);
       // limpeza: planos salvos antes da correção podem ter vindo com o
       // cronômetro de outro dia colado neles. A semana nova sempre começa parada.
-      const freshDays = (plan.days || []).map((d) => {
+      const freshDays = withRefLoads(client, plan.days, plan.weekKey).map((d) => {
         const { timerStartedAt, ...rest } = d;
         return rest;
       });
@@ -659,6 +680,10 @@ document.addEventListener("focusout", () => {
 
 function render() {
   renderQueuedFromSync = false;
+  // o índice do último treino vale só para este desenho: se o aluno corrigir
+  // uma série já registrada, o histórico muda de conteúdo sem mudar de tamanho,
+  // e um cache que sobrevivesse ao redesenho mostraria o número velho
+  lastDoneIndexCache = { key: "", map: new Map() };
   appEl.innerHTML = "";
   if (ui.view === "loading") { appEl.innerHTML = loadingHTML(); return; }
   if (ui.view === "gate") { appEl.innerHTML = gateHTML(); wireGate(); return; }
@@ -1497,13 +1522,16 @@ function exerciseHTML(ex, editable, index, total, client) {
           <label style="font-size:11px;font-weight:700;color:var(--muted);">SÉRIES DE TRABALHO</label>
           ${(ex.sets || []).map((s, i) => {
             // referência = o "feito" da última vez que o aluno realmente fez
-            // essa série. Fica gravado na própria série quando a semana é
-            // copiada; em fichas antigas (sem esse campo) cai no histórico.
-            let refReps = s.prevReps || "";
-            if (!refReps && client && client.__planId && ui.planWeekKey) {
-              refReps = getPreviousWeekSetRef(client, ui.planWeekKey, ex.name, i);
-            }
-            return setRowHTML(ex.id, s, i, editable, refReps, (ex.sets || []).length);
+            // essa série. O histórico manda, porque ele acompanha o que o aluno
+            // registra depois que o plano foi criado; `prevReps`, gravado na
+            // própria série quando a semana é copiada, fica de reserva.
+            const ref = lastDoneRef(client, ex.name, i);
+            const refReps = (ref && ref.repsDone) || s.prevReps || "";
+            // a carga do último treino substitui a que veio da cópia — a não ser
+            // que o treinador tenha digitado uma carga aqui dentro do plano,
+            // que aí é prescrição e manda
+            const refLoad = ref && ref.load && !s.loadSetByTrainer ? ref.load : "";
+            return setRowHTML(ex.id, s, i, editable, refReps, (ex.sets || []).length, refLoad);
           }).join("")}
           ${editable ? `<button class="dashed-btn" data-addset="${ex.id}" style="margin-top:6px;">+ série</button>` : ""}
           ${studentNoteHTML(ex)}
@@ -1512,7 +1540,7 @@ function exerciseHTML(ex, editable, index, total, client) {
     </div>`;
 }
 
-function setRowHTML(exId, s, i, editable, refReps = "", total = 1) {
+function setRowHTML(exId, s, i, editable, refReps = "", total = 1, refLoad = "") {
   const goal = s.repsGoal ?? s.reps ?? ""; // compatível com fichas antigas (campo único "reps")
   const rirOn = !!s.rirEnabled;
   const feitoValue = s.repsDone || "";
@@ -1537,7 +1565,7 @@ function setRowHTML(exId, s, i, editable, refReps = "", total = 1) {
         <span class="unit">feito</span>
       </span>
       <span class="stack" style="color:var(--steel);">
-        <span class="box kg grow"><input data-field="load" data-grow="1" value="${attr(s.load)}" /></span>
+        <span class="box kg grow"><input data-field="load" data-grow="1" value="${attr(refLoad || s.load)}" /></span>
         <span class="unit">kg</span>
       </span>
       ${
@@ -2137,15 +2165,37 @@ function addWeeks(weekKey, count) {
   return d.toISOString().slice(0, 10);
 }
 
-// busca o "feito" da mesma série da semana anterior (pra mostrar como referência)
-function getPreviousWeekSetRef(client, currentWeekKey, exName, setIndex) {
-  if (!client.history || !currentWeekKey) return "";
-  const prevWeekKey = addWeeks(currentWeekKey, -1);
-  const prevEntries = (client.history || []).filter((h) => h.weekKey === prevWeekKey && h.exName === exName && h.setIndex === setIndex);
-  if (prevEntries.length === 0) return "";
-  // pega a última série (em caso de múltiplas séries na mesma semana/posição)
-  const last = prevEntries[prevEntries.length - 1];
-  return last.repsDone || "";
+// Referência do último treino que o aluno REALMENTE fez daquele exercício.
+// Antes isso era procurado exatamente uma semana antes do plano, o que falhava
+// em dois casos comuns: planejar duas ou mais semanas à frente (procurava numa
+// semana que ainda nem aconteceu) e aluno que pulou uma semana. Agora vale a
+// última vez que ele fez, seja quando for.
+// O plano também não pode depender do instante em que foi criado: ele é uma
+// cópia da semana atual tirada no momento em que o treinador abre aquela
+// semana no calendário, então tudo que o aluno registrar DEPOIS disso ficava
+// de fora. Por isso a referência é procurada na hora de desenhar a tela.
+
+function lastDoneIndex(client, beforeWeekKey) {
+  const hist = client.history || [];
+  const key = `${client.id}|${beforeWeekKey}`;
+  if (lastDoneIndexCache.key === key) return lastDoneIndexCache.map;
+  const map = new Map();
+  for (const h of hist) {
+    if (!h.exName) continue;
+    // só conta o que aconteceu ANTES da semana do plano
+    if (beforeWeekKey && h.weekKey && h.weekKey >= beforeWeekKey) continue;
+    if (!h.repsDone && !h.load) continue; // entrada sem nada registrado
+    const k = h.exName + "|" + h.setIndex;
+    const cur = map.get(k);
+    if (!cur || (h.dateKey || "") >= (cur.dateKey || "")) map.set(k, h);
+  }
+  lastDoneIndexCache = { key, map };
+  return map;
+}
+
+function lastDoneRef(client, exName, setIndex) {
+  if (!client || !client.__planId || !ui.planWeekKey || !exName) return null;
+  return lastDoneIndex(client, ui.planWeekKey).get(exName + "|" + setIndex) || null;
 }
 
 // aplica a mudança de um campo (reps/kg/etc.) numa série e, se for reps/kg,
@@ -2205,7 +2255,18 @@ function saveSetField(client, dayId, exId, setId, field, value) {
         ...d,
         exercises: (d.exercises || []).map((ex) => {
           if (ex.id !== exId) return ex;
-          return { ...ex, sets: (ex.sets || []).map((s) => (s.id === setId ? { ...s, [field]: value } : s)) };
+          return {
+            ...ex,
+            sets: (ex.sets || []).map((s) => {
+              if (s.id !== setId) return s;
+              const next = { ...s, [field]: value };
+              // carga digitada aqui dentro é prescrição do treinador: a partir
+              // daí ela para de ser substituída pela do último treino. Apagar o
+              // campo desfaz isso e volta a seguir o último treino do aluno.
+              if (field === "load") next.loadSetByTrainer = !!value;
+              return next;
+            }),
+          };
         }),
       };
     });
@@ -3283,7 +3344,6 @@ function planEditHTML(client, editable) {
           </div>
           <div style="display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap;">
             <button class="dashed-btn" id="plan-activate"><i class="ti ti-check"></i> Ativar essa semana agora</button>
-            <button class="dashed-btn" id="plan-refresh"><i class="ti ti-refresh"></i> Atualizar referência com o treino atual</button>
             <button class="dashed-btn" id="plan-delete"><i class="ti ti-trash"></i> Apagar plano</button>
           </div>`
         : ""
@@ -3321,55 +3381,13 @@ function wirePlanEdit(client, editable) {
       if (!confirm(`Ativar o plano de ${weekRangeLabel(plan.weekKey)} como semana atual agora? Isso substitui o treino atual do aluno.`)) return;
       cancelPendingPlanSave();
       const nextPlans = (client.weekPlans || []).filter((p) => p.id !== plan.id);
-      await saveClient(client.id, { days: plan.days, activeWeekKey: weekKeyOf(todayKey()), weekPlans: nextPlans });
+      const freshDays = withRefLoads(client, plan.days, plan.weekKey);
+      await saveClient(client.id, { days: freshDays, activeWeekKey: weekKeyOf(todayKey()), weekPlans: nextPlans });
       ui.planWeekKey = null;
       ui.planSaveState = "idle";
       clearPendingPlanEdit();
       ui.planSavedAt = null;
       ui.calendarOpen = false;
-    };
-  }
-  const refreshBtn = el("plan-refresh");
-  if (refreshBtn) {
-    refreshBtn.onclick = async () => {
-      // busca o "feito" pela posição (mesmo dia, mesmo exercício, mesma série)
-      // no treino ATUAL do aluno, e traz pra dentro do plano
-      const currentDays = client.days || [];
-      const updatedDays = plan.days.map((d, di) => {
-        const curDay = currentDays[di];
-        if (!curDay) return d;
-        return {
-          ...d,
-          exercises: (d.exercises || []).map((ex, ei) => {
-            const curEx = curDay.exercises && curDay.exercises[ei];
-            if (!curEx) return ex;
-            return {
-              ...ex,
-              sets: (ex.sets || []).map((s, si) => {
-                const curSet = curEx.sets && curEx.sets[si];
-                if (!curSet) return s;
-                // o número da semana atual entra como REFERÊNCIA (esmaecido ao
-                // fundo), não como série já feita — a semana do plano continua
-                // zerada até o aluno treinar
-                return { ...s, repsDone: "", prevReps: curSet.repsDone || s.prevReps || "" };
-              }),
-            };
-          }),
-        };
-      });
-      const nextPlans = (client.weekPlans || []).map((p) => (p.id === plan.id ? { ...p, days: updatedDays } : p));
-      client.weekPlans = nextPlans;
-      const parentClient = clients.find((c) => c.id === client.id);
-      if (parentClient) parentClient.weekPlans = nextPlans;
-      // o rascunho em memória passa a ser essa versão — senão a próxima
-      // atualização do servidor reaplicaria os dias antigos por cima
-      pendingPlanEdit = { clientId: client.id, planId: plan.id, days: updatedDays };
-      await saveClient(client.id, { weekPlans: nextPlans });
-      ui.planSaveState = "saved";
-      ui.planSavedAt = hhmmNow();
-      refreshBtn.textContent = "Atualizado!";
-      setTimeout(() => { refreshBtn.innerHTML = `<i class="ti ti-refresh"></i> Atualizar referência com o treino atual`; }, 1500);
-      render();
     };
   }
   const deleteBtn = el("plan-delete");
