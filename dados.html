@@ -131,7 +131,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 <script src="firebase-config.js"></script>
 <script>
 firebase.initializeApp(firebaseConfig);
@@ -331,21 +331,59 @@ function safeSheetName(name, used) {
   return final;
 }
 
-// monta a aba de histórico de um aluno com tipos de célula de verdade
-// (data como Date, números como Number) — é isso que faz ordenar/somar
-// funcionar de verdade no Excel, em vez de tudo virar texto
-function buildHistorySheet(client) {
+// cores usadas nas planilhas (ARGB, exigido pelo ExcelJS)
+const XCOL = {
+  headerFill: "FF2A2830",
+  headerFont: "FFF3EFE6",
+  weekA: "FFFFFFFF",
+  weekB: "FFF1EEE6",
+  weekBandFont: "FF17161A",
+  titleFont: "FF17161A",
+  border: "FFD8D3C8",
+};
+
+function styleHeaderRow(row) {
+  row.eachCell((cell) => {
+    cell.font = { bold: true, color: { argb: XCOL.headerFont } };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: XCOL.headerFill } };
+    cell.alignment = { vertical: "middle" };
+    cell.border = { bottom: { style: "thin", color: { argb: XCOL.border } } };
+  });
+}
+
+// monta a aba de histórico de um aluno: cabeçalho fixo e em negrito, uma
+// faixa de cor alternada por semana (pra ver de relance onde uma semana
+// termina e a outra começa) e datas/números com tipo de célula de verdade
+// — mantendo tudo numa tabela só, então ainda dá pra ordenar e filtrar.
+function addHistorySheet(workbook, sheetName, client) {
+  const ws = workbook.addWorksheet(sheetName, { views: [{ state: "frozen", ySplit: 1 }] });
   const header = ["Data", "Dia da semana", "Semana", "Treino", "Exercício", "Série", "Meta", "Feito", "Carga (kg)", "Volume"];
+  ws.columns = [
+    { width: 12 }, { width: 13 }, { width: 12 }, { width: 16 }, { width: 24 },
+    { width: 8 }, { width: 8 }, { width: 8 }, { width: 12 }, { width: 10 },
+  ];
+
+  const headerRow = ws.addRow(header);
+  styleHeaderRow(headerRow);
+
   const rows = [...(client.history || [])]
     .filter((h) => h.dateKey)
-    .sort((a, b) => (a.dateKey < b.dateKey ? -1 : a.dateKey > b.dateKey ? 1 : (a.setIndex ?? 0) - (b.setIndex ?? 0)));
+    .sort((a, b) => {
+      const wa = a.weekKey || a.dateKey, wb = b.weekKey || b.dateKey;
+      if (wa !== wb) return wa < wb ? -1 : 1;
+      if (a.dateKey !== b.dateKey) return a.dateKey < b.dateKey ? -1 : 1;
+      if ((a.dayTitle || "") !== (b.dayTitle || "")) return (a.dayTitle || "") < (b.dayTitle || "") ? -1 : 1;
+      if ((a.exName || "") !== (b.exName || "")) return (a.exName || "") < (b.exName || "") ? -1 : 1;
+      return (a.setIndex ?? 0) - (b.setIndex ?? 0);
+    });
 
-  const aoa = [header];
+  let lastWeek = null, band = 0;
   for (const h of rows) {
+    if (h.weekKey !== lastWeek) { band = 1 - band; lastWeek = h.weekKey; }
     const reps = toNumberOrBlank(h.repsDone);
     const load = toNumberOrBlank(h.load);
     const volume = reps !== "" && load !== "" ? reps * load : "";
-    aoa.push([
+    const row = ws.addRow([
       h.dateKey ? new Date(h.dateKey + "T00:00:00") : "",
       weekdayOf(h.dateKey),
       h.weekKey ? new Date(h.weekKey + "T00:00:00") : "",
@@ -357,76 +395,75 @@ function buildHistorySheet(client) {
       load,
       volume,
     ]);
+    const fill = band === 0 ? XCOL.weekA : XCOL.weekB;
+    row.eachCell((cell) => { cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: fill } }; });
+    row.getCell(1).numFmt = "dd/mm/yyyy";
+    row.getCell(3).numFmt = "dd/mm/yyyy";
+    if (load !== "") row.getCell(9).numFmt = "0.0";
+    if (volume !== "") row.getCell(10).numFmt = "0.0";
   }
-  const ws = XLSX.utils.aoa_to_sheet(aoa);
-  // formata as colunas de data como data e as numéricas como número
-  const dateFmt = "dd/mm/yyyy";
-  for (let r = 1; r < aoa.length; r++) {
-    const dCell = ws[XLSX.utils.encode_cell({ r, c: 0 })];
-    if (dCell && dCell.v instanceof Date) { dCell.t = "d"; dCell.z = dateFmt; }
-    const wCell = ws[XLSX.utils.encode_cell({ r, c: 2 })];
-    if (wCell && wCell.v instanceof Date) { wCell.t = "d"; wCell.z = dateFmt; }
+
+  if (rows.length) {
+    ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1 + rows.length, column: header.length } };
   }
-  ws["!cols"] = [
-    { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 16 }, { wch: 22 },
-    { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 11 }, { wch: 9 },
-  ];
-  ws["!autofilter"] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: aoa.length - 1, c: header.length - 1 } }) };
   return ws;
 }
 
-function buildTodayPlanSheet(client) {
-  const header = ["Treino", "Exercício", "Série", "Meta", "Músculo"];
-  const aoa = [header];
+function addTodayPlanSheet(workbook, client) {
+  const ws = workbook.addWorksheet("Treino atual", { views: [{ state: "frozen", ySplit: 1 }] });
+  ws.columns = [{ width: 16 }, { width: 24 }, { width: 8 }, { width: 10 }, { width: 16 }];
+  styleHeaderRow(ws.addRow(["Treino", "Exercício", "Série", "Meta", "Músculo"]));
   for (const day of client.days || []) {
     for (const ex of day.exercises || []) {
       (ex.sets || []).forEach((s, i) => {
-        aoa.push([day.title || "", ex.name || "", i + 1, s.repsGoal ?? s.reps ?? "", ex.muscle || ""]);
+        ws.addRow([day.title || "", ex.name || "", i + 1, s.repsGoal ?? s.reps ?? "", ex.muscle || ""]);
       });
     }
   }
-  const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws["!cols"] = [{ wch: 16 }, { wch: 22 }, { wch: 8 }, { wch: 10 }, { wch: 14 }];
   return ws;
 }
 
-function buildSummarySheet(clients) {
-  const header = ["Aluno", "Séries registradas", "Primeiro registro", "Último registro", "Dias distintos treinados"];
-  const aoa = [header];
+function addSummarySheet(workbook, clients) {
+  const ws = workbook.addWorksheet("Resumo", { views: [{ state: "frozen", ySplit: 1 }] });
+  ws.columns = [{ width: 22 }, { width: 18 }, { width: 15 }, { width: 15 }, { width: 20 }];
+  styleHeaderRow(ws.addRow(["Aluno", "Séries registradas", "Primeiro registro", "Último registro", "Dias distintos treinados"]));
   for (const c of clients) {
     const hist = (c.history || []).filter((h) => h.dateKey);
     const dates = hist.map((h) => h.dateKey).sort();
     const distinctDays = new Set(hist.map((h) => h.dateKey)).size;
-    aoa.push([
+    const row = ws.addRow([
       c.name || c.id,
       hist.length,
       dates.length ? new Date(dates[0] + "T00:00:00") : "",
       dates.length ? new Date(dates[dates.length - 1] + "T00:00:00") : "",
       distinctDays,
     ]);
+    row.getCell(3).numFmt = "dd/mm/yyyy";
+    row.getCell(4).numFmt = "dd/mm/yyyy";
   }
-  const ws = XLSX.utils.aoa_to_sheet(aoa);
-  const dateFmt = "dd/mm/yyyy";
-  for (let r = 1; r < aoa.length; r++) {
-    for (const c of [2, 3]) {
-      const cell = ws[XLSX.utils.encode_cell({ r, c })];
-      if (cell && cell.v instanceof Date) { cell.t = "d"; cell.z = dateFmt; }
-    }
-  }
-  ws["!cols"] = [{ wch: 20 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 18 }];
   return ws;
 }
 
-function downloadWorkbook(wb, filename) {
-  XLSX.writeFile(wb, filename);
+async function downloadWorkbook(workbook, filename) {
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
-function downloadStudentExcel(client) {
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, buildHistorySheet(client), "Histórico");
-  XLSX.utils.book_append_sheet(wb, buildTodayPlanSheet(client), "Treino atual");
+async function downloadStudentExcel(client) {
+  $("#excel-log").textContent = "Gerando planilha...";
+  const workbook = new ExcelJS.Workbook();
+  addHistorySheet(workbook, "Histórico", client);
+  addTodayPlanSheet(workbook, client);
   const safeName = String(client.name || client.id).replace(/[^\w\- ]/g, "").trim() || client.id;
-  downloadWorkbook(wb, `${safeName} — MuraTraining.xlsx`);
+  await downloadWorkbook(workbook, `${safeName} — MuraTraining.xlsx`);
   $("#excel-log").textContent = `Planilha de ${client.name || client.id} baixada.`;
 }
 
@@ -434,14 +471,14 @@ $("#excel-download-all").onclick = async () => {
   $("#excel-log").textContent = "Gerando planilha...";
   const clients = await loadClients();
   renderExcelStudentList();
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, buildSummarySheet(clients), "Resumo");
+  const workbook = new ExcelJS.Workbook();
+  addSummarySheet(workbook, clients);
   const used = new Set(["Resumo"]);
   for (const c of clients) {
-    XLSX.utils.book_append_sheet(wb, buildHistorySheet(c), safeSheetName(c.name || c.id, used));
+    addHistorySheet(workbook, safeSheetName(c.name || c.id, used), c);
   }
   const stamp = new Date().toISOString().slice(0, 10);
-  downloadWorkbook(wb, `MuraTraining — todos os alunos — ${stamp}.xlsx`);
+  await downloadWorkbook(workbook, `MuraTraining — todos os alunos — ${stamp}.xlsx`);
   $("#excel-log").textContent = `Planilha baixada: ${clients.length} aluno(s).`;
 };
 
