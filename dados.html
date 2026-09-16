@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Dados — Meu Treino</title>
+<style>
+  :root {
+    --bg: #17161A; --panel: #211F25; --panelAlt: #2A2830; --line: #3A3742;
+    --chalk: #F3EFE6; --muted: #9A94A6; --red: #FF4433; --redDim: #5C2620;
+    --green: #639922;
+    --font-body: 'Inter', system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--chalk); font-family: var(--font-body);
+    min-height: 100vh; }
+  input, button, select { font-family: inherit; }
+  input { background: transparent; border: none; outline: none; color: var(--chalk); }
+  input::placeholder { color: var(--muted); }
+  button { cursor: pointer; border: none; background: none; color: inherit; font-size: 14px; }
+  .hidden { display: none !important; }
+  #app { max-width: 760px; margin: 0 auto; padding: 20px 16px 60px; }
+
+  .gate { display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 80px 16px; gap: 14px; text-align: center; }
+  .gate input { width: 100%; max-width: 260px; background: var(--panel); border: 1px solid var(--line) !important;
+    padding: 10px 12px; border-radius: 8px; font-size: 15px; }
+  .gate button.primary { width: 100%; max-width: 260px; background: var(--red); color: #fff;
+    padding: 10px; border-radius: 10px; font-size: 15px; margin-top: 4px; }
+  .gate .error { color: var(--red); font-size: 13px; }
+
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin: 0 0 20px; }
+  .back-link { color: var(--muted); font-size: 13px; text-decoration: none; }
+
+  .tabs { display: flex; gap: 6px; margin-bottom: 18px; border-bottom: 1px solid var(--line); }
+  .tab { padding: 10px 14px; font-size: 14px; color: var(--muted); border-bottom: 2px solid transparent; }
+  .tab.active { color: var(--chalk); border-bottom-color: var(--red); font-weight: 600; }
+
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin-bottom: 14px; }
+  .card h2 { font-size: 16px; margin: 0 0 8px; }
+  .card p.desc { color: var(--muted); font-size: 13px; line-height: 1.5; margin: 0 0 14px; }
+
+  .btn { background: var(--panelAlt); border: 1px solid var(--line); border-radius: 8px; padding: 9px 14px;
+    font-size: 13px; font-weight: 600; color: var(--chalk); }
+  .btn.primary { background: var(--red); border-color: var(--red); color: #fff; }
+  .btn.danger { background: var(--redDim); border-color: var(--red); color: var(--chalk); }
+  .btn:disabled { opacity: .45; cursor: default; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+  .student-list { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
+  .student-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: var(--panelAlt);
+    border-radius: 8px; font-size: 13px; }
+  .student-item .nm { flex: 1; font-weight: 600; }
+  .student-item .meta { color: var(--muted); font-size: 12px; }
+
+  table.diff { width: 100%; border-collapse: collapse; font-size: 13px; margin: 12px 0; }
+  table.diff th, table.diff td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+  table.diff th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; }
+  .diff-inc { color: var(--green); }
+  .diff-dec { color: var(--red); }
+
+  .log { font-size: 12px; color: var(--muted); white-space: pre-wrap; margin-top: 10px; line-height: 1.6; }
+  .spinner-note { font-size: 13px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="gate" class="gate">
+    <h1 style="margin-bottom:6px;">Dados — Meu Treino</h1>
+    <p class="sub">Acesso restrito ao personal.</p>
+    <input id="login-email" type="email" placeholder="e-mail" autocomplete="username" />
+    <input id="login-pass" type="password" placeholder="senha" autocomplete="current-password" />
+    <button class="primary" id="login-btn">Entrar</button>
+    <p class="error hidden" id="login-error"></p>
+  </div>
+
+  <div id="main" class="hidden">
+    <a class="back-link" href="index.html">&larr; voltar ao app</a>
+    <h1>Dados</h1>
+    <p class="sub">Backup, planilha do Excel e recuperação de progresso.</p>
+
+    <div class="tabs">
+      <button class="tab active" data-tab="backup">Backup</button>
+      <button class="tab" data-tab="excel">Planilha Excel</button>
+      <button class="tab" data-tab="recovery">Recuperação</button>
+    </div>
+
+    <!-- ---------- BACKUP ---------- -->
+    <div class="tab-panel" id="panel-backup">
+      <div class="card">
+        <h2>Baixar backup</h2>
+        <p class="desc">Baixa a ficha completa de todos os alunos (treinos e histórico) num arquivo. Guarde antes de mexer em qualquer coisa.</p>
+        <button class="btn primary" id="backup-download">Baixar backup completo</button>
+        <p class="log" id="backup-log"></p>
+      </div>
+
+      <div class="card">
+        <h2>Restaurar backup</h2>
+        <p class="desc">Escolhe um arquivo de backup baixado antes. Mostra o que vai mudar em cada aluno antes de aplicar qualquer coisa — nada é gravado sem duas confirmações.</p>
+        <input type="file" id="restore-file" accept="application/json" />
+        <div id="restore-preview"></div>
+      </div>
+    </div>
+
+    <!-- ---------- EXCEL ---------- -->
+    <div class="tab-panel hidden" id="panel-excel">
+      <div class="card">
+        <h2>Planilha por aluno</h2>
+        <p class="desc">Uma aba por aluno, uma linha por série registrada: data, dia da semana, semana, treino, exercício, série, meta, feito, carga e volume. Datas e números saem como valores de verdade (dá pra ordenar e somar).</p>
+        <div class="row" style="margin-bottom:10px;">
+          <button class="btn primary" id="excel-download-all">Baixar planilha com todos os alunos</button>
+        </div>
+        <div class="student-list" id="excel-student-list"></div>
+        <p class="log" id="excel-log"></p>
+      </div>
+    </div>
+
+    <!-- ---------- RECOVERY ---------- -->
+    <div class="tab-panel hidden" id="panel-recovery">
+      <div class="card">
+        <h2>Recuperação de progresso</h2>
+        <p class="desc">Procura registros do histórico que ficaram com campo vazio (semana, treino ou exercício não identificados) e tenta preencher a partir da ficha atual do aluno. Só preenche o que está vazio — nunca troca um valor que já existe.</p>
+        <button class="btn" id="recovery-scan">Verificar</button>
+        <div id="recovery-preview"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="firebase-config.js"></script>
+<script>
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db = firebase.firestore();
+
+const $ = (sel) => document.querySelector(sel);
+let clientsCache = null; // [{id, ...data}]
+
+// ---------------------------------------------------------------------
+// auth
+// ---------------------------------------------------------------------
+auth.onAuthStateChanged(async (user) => {
+  if (!user || user.email.toLowerCase() !== TRAINER_EMAIL.toLowerCase()) {
+    $("#gate").classList.remove("hidden");
+    $("#main").classList.add("hidden");
+    if (user) auth.signOut();
+    return;
+  }
+  $("#gate").classList.add("hidden");
+  $("#main").classList.remove("hidden");
+  await loadClients();
+  renderExcelStudentList();
+});
+
+$("#login-btn").onclick = async () => {
+  const email = $("#login-email").value.trim();
+  const pass = $("#login-pass").value;
+  $("#login-error").classList.add("hidden");
+  try {
+    await auth.signInWithEmailAndPassword(email, pass);
+  } catch (e) {
+    $("#login-error").textContent = "Não foi possível entrar: " + (e.message || e.code);
+    $("#login-error").classList.remove("hidden");
+  }
+};
+
+// ---------------------------------------------------------------------
+// tabs
+// ---------------------------------------------------------------------
+document.querySelectorAll(".tab").forEach((btn) => {
+  btn.onclick = () => {
+    document.querySelectorAll(".tab").forEach((b) => b.classList.remove("active"));
+    document.querySelectorAll(".tab-panel").forEach((p) => p.classList.add("hidden"));
+    btn.classList.add("active");
+    $("#panel-" + btn.dataset.tab).classList.remove("hidden");
+  };
+});
+
+// ---------------------------------------------------------------------
+// dados
+// ---------------------------------------------------------------------
+async function loadClients() {
+  const snap = await db.collection("clients").get();
+  clientsCache = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  return clientsCache;
+}
+
+function fmtDateBR(dateKey) {
+  if (!dateKey || dateKey.length < 10) return dateKey || "";
+  const [y, m, d] = dateKey.split("-");
+  return `${d}/${m}/${y}`;
+}
+
+const WEEKDAY_PT = ["domingo", "segunda", "terça", "quarta", "quinta", "sexta", "sábado"];
+function weekdayOf(dateKey) {
+  if (!dateKey) return "";
+  const d = new Date(dateKey + "T00:00:00");
+  return WEEKDAY_PT[d.getDay()];
+}
+
+function toNumberOrBlank(v) {
+  if (v === "" || v === null || v === undefined) return "";
+  const n = Number(String(v).replace(",", "."));
+  return Number.isFinite(n) ? n : "";
+}
+
+// ---------------------------------------------------------------------
+// BACKUP
+// ---------------------------------------------------------------------
+$("#backup-download").onclick = async () => {
+  $("#backup-log").textContent = "Gerando backup...";
+  const clients = await loadClients();
+  const payload = {
+    generatedAt: new Date().toISOString(),
+    clients,
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const stamp = new Date().toISOString().slice(0, 10);
+  a.href = url;
+  a.download = `muratraining-backup-${stamp}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  $("#backup-log").textContent = `Backup baixado: ${clients.length} aluno(s), ${stamp}.`;
+};
+
+$("#restore-file").onchange = async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const preview = $("#restore-preview");
+  preview.innerHTML = "";
+  let parsed;
+  try {
+    parsed = JSON.parse(await file.text());
+  } catch (err) {
+    preview.innerHTML = `<p class="log" style="color:var(--red);">Arquivo inválido: ${err.message}</p>`;
+    return;
+  }
+  const backupClients = Array.isArray(parsed.clients) ? parsed.clients : [];
+  if (!backupClients.length) {
+    preview.innerHTML = `<p class="log" style="color:var(--red);">Esse arquivo não tem alunos dentro.</p>`;
+    return;
+  }
+  const current = await loadClients();
+  const currentById = new Map(current.map((c) => [c.id, c]));
+
+  const rows = backupClients.map((bc) => {
+    const cur = currentById.get(bc.id);
+    const backupCount = (bc.history || []).length;
+    const currentCount = cur ? (cur.history || []).length : 0;
+    return { id: bc.id, name: bc.name || bc.id, backupCount, currentCount, exists: !!cur };
+  });
+
+  const newIds = new Set(backupClients.map((c) => c.id));
+  const missingFromBackup = current.filter((c) => !newIds.has(c.id));
+
+  let html = `<table class="diff"><thead><tr><th>Aluno</th><th>Séries hoje</th><th>Séries no backup</th><th>Diferença</th></tr></thead><tbody>`;
+  for (const r of rows) {
+    const diff = r.backupCount - r.currentCount;
+    const diffClass = diff > 0 ? "diff-inc" : diff < 0 ? "diff-dec" : "";
+    const diffLabel = diff > 0 ? `+${diff}` : diff;
+    html += `<tr><td>${escapeHtml(r.name)}${r.exists ? "" : " (não existe mais)"}</td><td>${r.currentCount}</td><td>${r.backupCount}</td><td class="${diffClass}">${diffLabel}</td></tr>`;
+  }
+  html += `</tbody></table>`;
+  if (missingFromBackup.length) {
+    html += `<p class="log">${missingFromBackup.length} aluno(s) existem hoje mas não estão nesse backup e NÃO serão tocados: ${missingFromBackup.map((c) => escapeHtml(c.name || c.id)).join(", ")}.</p>`;
+  }
+  html += `<label style="display:flex;gap:8px;align-items:center;font-size:13px;margin:14px 0 10px;">
+      <input type="checkbox" id="restore-confirm-1" /> Entendi que isso substitui os dados atuais desses alunos pelos do arquivo.
+    </label>`;
+  html += `<button class="btn danger" id="restore-apply" disabled>Restaurar backup</button>`;
+  preview.innerHTML = html;
+
+  $("#restore-confirm-1").onchange = (ev) => {
+    $("#restore-apply").disabled = !ev.target.checked;
+  };
+
+  $("#restore-apply").onclick = async () => {
+    if (!confirm(`Confirma restaurar ${rows.filter((r) => r.exists).length} aluno(s)? Essa ação não pode ser desfeita.`)) return;
+    $("#restore-apply").disabled = true;
+    $("#restore-apply").textContent = "Restaurando...";
+    let ok = 0, fail = 0;
+    for (const bc of backupClients) {
+      if (!currentById.has(bc.id)) continue; // não recria aluno apagado
+      const { id, ...data } = bc;
+      try {
+        await db.collection("clients").doc(id).set(data);
+        ok++;
+      } catch (err) {
+        fail++;
+      }
+    }
+    preview.innerHTML += `<p class="log">Restauração concluída: ${ok} aluno(s) restaurado(s)${fail ? `, ${fail} falharam` : ""}.</p>`;
+    clientsCache = null;
+  };
+};
+
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// ---------------------------------------------------------------------
+// EXCEL
+// ---------------------------------------------------------------------
+function renderExcelStudentList() {
+  const list = $("#excel-student-list");
+  list.innerHTML = "";
+  for (const c of clientsCache || []) {
+    const count = (c.history || []).length;
+    const div = document.createElement("div");
+    div.className = "student-item";
+    div.innerHTML = `<span class="nm">${escapeHtml(c.name || c.id)}</span><span class="meta">${count} série(s)</span><button class="btn" data-id="${c.id}">Baixar</button>`;
+    div.querySelector("button").onclick = () => downloadStudentExcel(c);
+    list.appendChild(div);
+  }
+}
+
+function safeSheetName(name, used) {
+  let base = String(name || "aluno").replace(/[\\/?*[\]:]/g, " ").slice(0, 28).trim() || "aluno";
+  let final = base, i = 2;
+  while (used.has(final)) { final = `${base} (${i++})`; }
+  used.add(final);
+  return final;
+}
+
+// monta a aba de histórico de um aluno com tipos de célula de verdade
+// (data como Date, números como Number) — é isso que faz ordenar/somar
+// funcionar de verdade no Excel, em vez de tudo virar texto
+function buildHistorySheet(client) {
+  const header = ["Data", "Dia da semana", "Semana", "Treino", "Exercício", "Série", "Meta", "Feito", "Carga (kg)", "Volume"];
+  const rows = [...(client.history || [])]
+    .filter((h) => h.dateKey)
+    .sort((a, b) => (a.dateKey < b.dateKey ? -1 : a.dateKey > b.dateKey ? 1 : (a.setIndex ?? 0) - (b.setIndex ?? 0)));
+
+  const aoa = [header];
+  for (const h of rows) {
+    const reps = toNumberOrBlank(h.repsDone);
+    const load = toNumberOrBlank(h.load);
+    const volume = reps !== "" && load !== "" ? reps * load : "";
+    aoa.push([
+      h.dateKey ? new Date(h.dateKey + "T00:00:00") : "",
+      weekdayOf(h.dateKey),
+      h.weekKey ? new Date(h.weekKey + "T00:00:00") : "",
+      h.dayTitle || "",
+      h.exName || "",
+      (h.setIndex ?? 0) + 1,
+      h.repsGoal || "",
+      h.repsDone || "",
+      load,
+      volume,
+    ]);
+  }
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  // formata as colunas de data como data e as numéricas como número
+  const dateFmt = "dd/mm/yyyy";
+  for (let r = 1; r < aoa.length; r++) {
+    const dCell = ws[XLSX.utils.encode_cell({ r, c: 0 })];
+    if (dCell && dCell.v instanceof Date) { dCell.t = "d"; dCell.z = dateFmt; }
+    const wCell = ws[XLSX.utils.encode_cell({ r, c: 2 })];
+    if (wCell && wCell.v instanceof Date) { wCell.t = "d"; wCell.z = dateFmt; }
+  }
+  ws["!cols"] = [
+    { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 16 }, { wch: 22 },
+    { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 11 }, { wch: 9 },
+  ];
+  ws["!autofilter"] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: aoa.length - 1, c: header.length - 1 } }) };
+  return ws;
+}
+
+function buildTodayPlanSheet(client) {
+  const header = ["Treino", "Exercício", "Série", "Meta", "Músculo"];
+  const aoa = [header];
+  for (const day of client.days || []) {
+    for (const ex of day.exercises || []) {
+      (ex.sets || []).forEach((s, i) => {
+        aoa.push([day.title || "", ex.name || "", i + 1, s.repsGoal ?? s.reps ?? "", ex.muscle || ""]);
+      });
+    }
+  }
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!cols"] = [{ wch: 16 }, { wch: 22 }, { wch: 8 }, { wch: 10 }, { wch: 14 }];
+  return ws;
+}
+
+function buildSummarySheet(clients) {
+  const header = ["Aluno", "Séries registradas", "Primeiro registro", "Último registro", "Dias distintos treinados"];
+  const aoa = [header];
+  for (const c of clients) {
+    const hist = (c.history || []).filter((h) => h.dateKey);
+    const dates = hist.map((h) => h.dateKey).sort();
+    const distinctDays = new Set(hist.map((h) => h.dateKey)).size;
+    aoa.push([
+      c.name || c.id,
+      hist.length,
+      dates.length ? new Date(dates[0] + "T00:00:00") : "",
+      dates.length ? new Date(dates[dates.length - 1] + "T00:00:00") : "",
+      distinctDays,
+    ]);
+  }
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  const dateFmt = "dd/mm/yyyy";
+  for (let r = 1; r < aoa.length; r++) {
+    for (const c of [2, 3]) {
+      const cell = ws[XLSX.utils.encode_cell({ r, c })];
+      if (cell && cell.v instanceof Date) { cell.t = "d"; cell.z = dateFmt; }
+    }
+  }
+  ws["!cols"] = [{ wch: 20 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 18 }];
+  return ws;
+}
+
+function downloadWorkbook(wb, filename) {
+  XLSX.writeFile(wb, filename);
+}
+
+function downloadStudentExcel(client) {
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, buildHistorySheet(client), "Histórico");
+  XLSX.utils.book_append_sheet(wb, buildTodayPlanSheet(client), "Treino atual");
+  const safeName = String(client.name || client.id).replace(/[^\w\- ]/g, "").trim() || client.id;
+  downloadWorkbook(wb, `${safeName} — MuraTraining.xlsx`);
+  $("#excel-log").textContent = `Planilha de ${client.name || client.id} baixada.`;
+}
+
+$("#excel-download-all").onclick = async () => {
+  $("#excel-log").textContent = "Gerando planilha...";
+  const clients = await loadClients();
+  renderExcelStudentList();
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, buildSummarySheet(clients), "Resumo");
+  const used = new Set(["Resumo"]);
+  for (const c of clients) {
+    XLSX.utils.book_append_sheet(wb, buildHistorySheet(c), safeSheetName(c.name || c.id, used));
+  }
+  const stamp = new Date().toISOString().slice(0, 10);
+  downloadWorkbook(wb, `MuraTraining — todos os alunos — ${stamp}.xlsx`);
+  $("#excel-log").textContent = `Planilha baixada: ${clients.length} aluno(s).`;
+};
+
+// ---------------------------------------------------------------------
+// RECUPERAÇÃO — preenche campos vazios do histórico a partir da ficha atual,
+// sem nunca sobrescrever um valor que já existe
+// ---------------------------------------------------------------------
+function buildLookupFromDays(client) {
+  // dayId|exId|setId -> { dayTitle, exName, setIndex }
+  const map = new Map();
+  for (const day of client.days || []) {
+    for (const ex of day.exercises || []) {
+      (ex.sets || []).forEach((s, i) => {
+        map.set(`${day.id}|${ex.id}|${s.id}`, { dayTitle: day.title || "", exName: ex.name || "", setIndex: i });
+      });
+    }
+  }
+  return map;
+}
+
+function computeRecoveryPlan(client) {
+  const lookup = buildLookupFromDays(client);
+  const fixes = [];
+  const nextHistory = (client.history || []).map((h) => {
+    const missing = !h.weekKey || !h.dayTitle || !h.exName || h.setIndex === undefined || h.setIndex === null;
+    if (!missing) return h;
+    const found = lookup.get(`${h.dayId}|${h.exId}|${h.setId}`);
+    const patch = {};
+    if (!h.weekKey && h.dateKey) patch.weekKey = weekKeyOfSimple(h.dateKey);
+    if (!h.dayTitle && found) patch.dayTitle = found.dayTitle;
+    if (!h.exName && found) patch.exName = found.exName;
+    if ((h.setIndex === undefined || h.setIndex === null) && found) patch.setIndex = found.setIndex;
+    if (Object.keys(patch).length === 0) return h;
+    fixes.push({ before: h, patch });
+    return { ...h, ...patch };
+  });
+  return { nextHistory, fixes };
+}
+
+function weekKeyOfSimple(dateKey) {
+  const d = new Date(dateKey + "T00:00:00");
+  const day = d.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  const monday = new Date(d);
+  monday.setDate(d.getDate() + diff);
+  const y = monday.getFullYear(), m = String(monday.getMonth() + 1).padStart(2, "0"), dd = String(monday.getDate()).padStart(2, "0");
+  return `${y}-${m}-${dd}`;
+}
+
+$("#recovery-scan").onclick = async () => {
+  const preview = $("#recovery-preview");
+  preview.innerHTML = `<p class="spinner-note">Verificando...</p>`;
+  const clients = await loadClients();
+  const plans = clients.map((c) => ({ client: c, ...computeRecoveryPlan(c) })).filter((p) => p.fixes.length);
+
+  if (!plans.length) {
+    preview.innerHTML = `<p class="log">Nada para corrigir — todos os registros já estão completos.</p>`;
+    return;
+  }
+
+  let html = `<table class="diff"><thead><tr><th>Aluno</th><th>Registros a completar</th></tr></thead><tbody>`;
+  for (const p of plans) {
+    html += `<tr><td>${escapeHtml(p.client.name || p.client.id)}</td><td>${p.fixes.length}</td></tr>`;
+  }
+  html += `</tbody></table>`;
+  html += `<button class="btn primary" id="recovery-apply">Aplicar correção em ${plans.length} aluno(s)</button>`;
+  preview.innerHTML = html;
+
+  $("#recovery-apply").onclick = async () => {
+    if (!confirm(`Confirma preencher os campos vazios de ${plans.length} aluno(s)? Nenhum valor existente será sobrescrito.`)) return;
+    $("#recovery-apply").disabled = true;
+    $("#recovery-apply").textContent = "Aplicando...";
+    let ok = 0;
+    for (const p of plans) {
+      await db.collection("clients").doc(p.client.id).update({ history: p.nextHistory });
+      ok++;
+    }
+    preview.innerHTML += `<p class="log">Concluído: ${ok} aluno(s) atualizado(s).</p>`;
+    clientsCache = null;
+  };
+};
+</script>
+</body>
+</html>
