@@ -20,7 +20,7 @@
   :root {
     --bg: #17161A; --panel: #211F25; --panelAlt: #2A2830; --line: #3A3742;
     --chalk: #F3EFE6; --muted: #9A94A6; --red: #FF4433; --redDim: #5C2620;
-    --steel: #4C86B4; --plate: #E8B94A;
+    --steel: #4C86B4; --plate: #E8B94A; --green: #639922;
     --font-display: 'Anton', 'Inter', sans-serif;
     --font-body: 'Inter', system-ui, sans-serif;
   }
@@ -161,6 +161,16 @@
      espremer os campos de meta/feito/kg na largura do celular */
   .set-row .move-btns { gap: 1px; }
   .set-row .move-btn { font-size: 10px; padding: 1px 4px; }
+
+  /* aviso curto de "salvo", disparado pelo Enter. Fica fora do #app de
+     propósito: redesenhar a tela apaga tudo que está lá dentro, e o aviso
+     precisa sobreviver ao redesenho que a própria gravação provoca. */
+  #saved-toast { position: fixed; left: 50%; transform: translateX(-50%);
+    bottom: calc(18px + env(safe-area-inset-bottom));
+    background: var(--panelAlt); border: 1px solid var(--green); color: var(--chalk);
+    font-size: 13px; padding: 7px 16px; border-radius: 20px; white-space: nowrap;
+    opacity: 0; pointer-events: none; transition: opacity .18s ease; z-index: 90; }
+  #saved-toast.on { opacity: 1; }
 
   .dashed-btn { border: 1px dashed var(--line); color: var(--muted); border-radius: 10px; padding: 9px 16px; font-size: 15px; display: inline-flex; align-items: center; gap: 5px; }
   .toolbar-nav { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin-bottom: 14px; }

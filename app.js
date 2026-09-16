@@ -678,7 +678,75 @@ document.addEventListener("focusout", () => {
   }, 150);
 });
 
+// Um campo só é salvo quando PERDE o foco (o evento `change`). Só que
+// redesenhar a tela apaga todos os campos de uma vez, e um campo apagado com o
+// cursor ainda dentro nunca chega a disparar esse evento: o que foi digitado
+// some sem aviso nenhum. É o caso de digitar a carga e sair da tela logo em
+// seguida — no celular acontece fácil, porque tocar num botão nem sempre tira
+// o foco do campo antes de o botão agir.
+// Então, antes de apagar a tela, o campo em edição é confirmado na mão.
+let committingField = false;
+
+function commitFocusedField() {
+  if (committingField) return; // salvar pode redesenhar; não entra em looping
+  const ae = document.activeElement;
+  if (!ae || (ae.tagName !== "INPUT" && ae.tagName !== "TEXTAREA")) return;
+  if (!ae.closest || !ae.closest("#app")) return;
+  committingField = true;
+  try {
+    // tirar o foco é o que faz o navegador disparar o "change" — e ele dispara
+    // uma vez só, e só se o valor tiver mudado mesmo. Chamar o salvamento na
+    // mão aqui gravaria duas vezes (uma agora, outra no `change` que viria
+    // depois), e gravação sobrando é exatamente o que faz um aparelho
+    // atropelar o outro.
+    ae.blur();
+  } catch (e) {
+    // não segura o redesenho por causa de uma falha ao salvar
+  } finally {
+    committingField = false;
+  }
+}
+
+// fechar, minimizar ou trocar de aba também apaga o que estava sendo digitado
+document.addEventListener("visibilitychange", () => { if (document.hidden) commitFocusedField(); });
+window.addEventListener("pagehide", () => commitFocusedField());
+
+// Enter confirma o que está sendo digitado, no computador e no celular.
+// Quem grava é o evento `change`, e ele só acontece quando o campo perde o
+// foco — então o Enter tira o foco, o que de quebra fecha o teclado do
+// celular. Em observações (textarea) o Enter continua pulando linha; ali
+// confirma com Ctrl+Enter (ou Cmd+Enter no Mac).
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  const t = e.target;
+  if (!t || !t.closest || !t.closest("#app")) return;
+  const isTextarea = t.tagName === "TEXTAREA";
+  if (!isTextarea && t.tagName !== "INPUT") return;
+  if (isTextarea && !(e.ctrlKey || e.metaKey)) return;
+  e.preventDefault();
+  const mudou = t.value !== t.defaultValue;
+  t.blur(); // dispara o `change`, que grava
+  if (mudou) showSavedToast();
+});
+
+// O aviso vive FORA do #app de propósito: gravar pode redesenhar a tela, e o
+// redesenho apaga tudo que está lá dentro — inclusive o próprio aviso.
+let savedToastTimer = null;
+function showSavedToast() {
+  let t = document.getElementById("saved-toast");
+  if (!t) {
+    t = document.createElement("div");
+    t.id = "saved-toast";
+    t.textContent = "salvo";
+    document.body.appendChild(t);
+  }
+  t.classList.add("on");
+  if (savedToastTimer) clearTimeout(savedToastTimer);
+  savedToastTimer = setTimeout(() => t.classList.remove("on"), 1200);
+}
+
 function render() {
+  commitFocusedField();
   renderQueuedFromSync = false;
   // o índice do último treino vale só para este desenho: se o aluno corrigir
   // uma série já registrada, o histórico muda de conteúdo sem mudar de tamanho,
@@ -1453,7 +1521,7 @@ function exerciseHTML(ex, editable, index, total, client) {
       <div class="ex-top">
         ${
           editable
-            ? `<input class="ex-name" data-field="name" placeholder="Exercício" value="${attr(ex.name)}" />`
+            ? `<input class="ex-name" data-field="name" enterkeyhint="done" placeholder="Exercício" value="${attr(ex.name)}" />`
             : `<div class="ex-name">${escapeHTML(ex.name || "Exercício")}</div>`
         }
         ${
@@ -1553,19 +1621,19 @@ function setRowHTML(exId, s, i, editable, refReps = "", total = 1, refLoad = "")
     <div class="set-row" data-setid="${s.id}" data-exid="${exId}">
       <span class="set-idx">${i + 1}ª</span>
       <span class="stack" style="color:var(--plate);">
-        <span class="box meta grow"><input data-field="repsGoal" data-grow="1" value="${attr(goal)}" placeholder="meta" ${editable ? "" : "readonly"} /></span>
+        <span class="box meta grow"><input data-field="repsGoal" data-grow="1" enterkeyhint="done" value="${attr(goal)}" placeholder="meta" ${editable ? "" : "readonly"} /></span>
         <span class="unit">meta</span>
       </span>
       <span class="stack" style="color:var(--chalk);position:relative;">
         ${
           editable
-            ? `<span class="box"><input class="${ghost ? "ghost-ref" : ""}" data-field="repsDone" data-grow="1" value="${attr(feitoValue)}" placeholder="${attr(feitoPlaceholder)}" /></span>`
+            ? `<span class="box"><input class="${ghost ? "ghost-ref" : ""}" data-field="repsDone" data-grow="1" enterkeyhint="done" value="${attr(feitoValue)}" placeholder="${attr(feitoPlaceholder)}" /></span>`
             : `<button type="button" class="box feito-open${ghost ? " ghost-ref" : ""}" data-feitoopen="1">${escapeHTML(feitoValue || ghost || "–")}</button>`
         }
         <span class="unit">feito</span>
       </span>
       <span class="stack" style="color:var(--steel);">
-        <span class="box kg grow"><input data-field="load" data-grow="1" value="${attr(refLoad || s.load)}" /></span>
+        <span class="box kg grow"><input data-field="load" data-grow="1" enterkeyhint="done" value="${attr(refLoad || s.load)}" /></span>
         <span class="unit">kg</span>
       </span>
       ${
