@@ -2214,8 +2214,19 @@ function wireClientAreaInner(client, editable) {
 
 // ---------- histórico de progressão (reps/kg por semana) ----------
 
+// toISOString() converte pra UTC antes de cortar a data — no fuso do Brasil isso
+// vira o dia seguinte a partir das 21h (ou a segunda-feira errada aos domingos
+// à noite). Essas datas são sempre "dia calendário local", nunca um instante,
+// então formatamos com os getters locais em vez de passar por UTC.
+function localDateKey(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 function todayKey() {
-  return new Date().toISOString().slice(0, 10);
+  return localDateKey(new Date());
 }
 
 function weekKeyOf(dateKey) {
@@ -2224,13 +2235,13 @@ function weekKeyOf(dateKey) {
   const diff = day === 0 ? -6 : 1 - day; // volta pra segunda-feira daquela semana
   const monday = new Date(d);
   monday.setDate(d.getDate() + diff);
-  return monday.toISOString().slice(0, 10);
+  return localDateKey(monday);
 }
 
 function addWeeks(weekKey, count) {
   const d = new Date(weekKey + "T00:00:00");
   d.setDate(d.getDate() + count * 7);
-  return d.toISOString().slice(0, 10);
+  return localDateKey(d);
 }
 
 // Referência do último treino que o aluno REALMENTE fez daquele exercício.
@@ -2927,17 +2938,11 @@ function wireProgression(client) {
 
 // ---------- calendário de semanas ----------
 
-function addWeeks(weekKey, n) {
-  const d = new Date(weekKey + "T00:00:00");
-  d.setDate(d.getDate() + n * 7);
-  return d.toISOString().slice(0, 10);
-}
-
 function weekRangeLabel(weekKey) {
   const start = new Date(weekKey + "T00:00:00");
   const end = new Date(start);
   end.setDate(start.getDate() + 6);
-  return `${weekLabel(weekKey)} – ${weekLabel(end.toISOString().slice(0, 10))}`;
+  return `${weekLabel(weekKey)} – ${weekLabel(localDateKey(end))}`;
 }
 
 // resumo (só leitura) do que foi feito numa semana já passada, a partir do histórico
