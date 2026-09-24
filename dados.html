@@ -119,6 +119,17 @@
     <!-- ---------- RECOVERY ---------- -->
     <div class="tab-panel hidden" id="panel-recovery">
       <div class="card">
+        <h2>Preencher semana atual</h2>
+        <p class="desc">Devolve pra ficha de cada aluno o que ele anotou na semana que está aberta no app (repetições feitas e carga). Pode usar o histórico do próprio app ou as planilhas baixadas na aba Planilha Excel. Só preenche campo vazio — nunca troca um valor que já existe. Mostra tudo antes de gravar.</p>
+        <div class="row" style="margin-bottom:10px;">
+          <button class="btn" id="weekfill-history">Usar histórico do app</button>
+        </div>
+        <p class="desc" style="margin-bottom:6px;">Ou escolha as planilhas (.xlsx) — uma por aluno ou a de todos os alunos:</p>
+        <input type="file" id="weekfill-file" accept=".xlsx" multiple />
+        <div id="weekfill-preview"></div>
+      </div>
+
+      <div class="card">
         <h2>Recuperação de progresso</h2>
         <p class="desc">Procura registros do histórico que ficaram com campo vazio (semana, treino ou exercício não identificados) e tenta preencher a partir da ficha atual do aluno. Só preenche o que está vazio — nunca troca um valor que já existe.</p>
         <button class="btn" id="recovery-scan">Verificar</button>
@@ -133,6 +144,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 <script src="firebase-config.js"></script>
+<script src="week-fill.js"></script>
 <script>
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
@@ -559,6 +571,141 @@ $("#recovery-scan").onclick = async () => {
     preview.innerHTML += `<p class="log">Concluído: ${ok} aluno(s) atualizado(s).</p>`;
     clientsCache = null;
   };
+};
+
+// ---------------------------------------------------------------------
+// PREENCHER SEMANA ATUAL (lógica em week-fill.js)
+// ---------------------------------------------------------------------
+function localTodayKey() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// sources: [{ clientId, entries, addToHistory }]
+function buildWeekFillPlans(clients, sources) {
+  const byId = new Map(clients.map((c) => [c.id, c]));
+  const today = localTodayKey();
+  return sources.map((src) => {
+    const client = byId.get(src.clientId);
+    if (!client) return null;
+    const weekKey = activeWeekKeyOf(client, today);
+    return { client, weekKey, ...computeWeekFill(client, src.entries, weekKey, { addToHistory: src.addToHistory }) };
+  }).filter(Boolean);
+}
+
+function renderWeekFillPreview(sources, notes) {
+  const preview = $("#weekfill-preview");
+  const plans = buildWeekFillPlans(clientsCache, sources);
+  const withFills = plans.filter((p) => p.fills.length);
+
+  let html = notes.map((n) => `<p class="log">${n}</p>`).join("");
+  html += `<table class="diff"><thead><tr><th>Aluno</th><th>Semana aberta</th><th>Campos a preencher</th></tr></thead><tbody>`;
+  for (const p of plans) {
+    html += `<tr><td>${escapeHtml(p.client.name || p.client.id)}</td><td>${fmtDateBR(p.weekKey)}</td><td class="${p.fills.length ? "diff-inc" : ""}">${p.fills.length}</td></tr>`;
+  }
+  html += `</tbody></table>`;
+
+  for (const p of withFills) {
+    html += `<details style="margin:6px 0;font-size:13px;"><summary>${escapeHtml(p.client.name || p.client.id)} — ${p.fills.length} série(s)</summary>
+      <table class="diff"><thead><tr><th>Treino</th><th>Exercício</th><th>Série</th><th>Feito</th><th>Kg</th><th>Anotado em</th></tr></thead><tbody>`;
+    for (const f of p.fills) {
+      html += `<tr><td>${escapeHtml(f.dayTitle)}</td><td>${escapeHtml(f.exName)}</td><td>${f.setIndex + 1}</td><td>${escapeHtml(f.repsDone ?? "—")}</td><td>${escapeHtml(f.load ?? "—")}</td><td>${fmtDateBR(f.dateKey)}</td></tr>`;
+    }
+    html += `</tbody></table></details>`;
+  }
+
+  if (!withFills.length) {
+    html += `<p class="log">Nada para preencher — os campos da semana aberta já estão preenchidos ou não há anotações dessa semana na fonte escolhida.</p>`;
+    preview.innerHTML = html;
+    return;
+  }
+  html += `<button class="btn primary" id="weekfill-apply">Preencher ${withFills.length} aluno(s)</button>`;
+  preview.innerHTML = html;
+
+  $("#weekfill-apply").onclick = async () => {
+    if (!confirm(`Confirma preencher os campos vazios da semana de ${withFills.length} aluno(s)? Nenhum valor existente será sobrescrito.`)) return;
+    $("#weekfill-apply").disabled = true;
+    $("#weekfill-apply").textContent = "Preenchendo...";
+    // relê do banco na hora de gravar: se o aluno anotou algo enquanto a
+    // prévia estava aberta, isso é respeitado e não é sobrescrito
+    const fresh = await loadClients();
+    const freshPlans = buildWeekFillPlans(fresh, sources).filter((p) => p.fills.length);
+    let ok = 0, fail = 0, fields = 0;
+    for (const p of freshPlans) {
+      const update = { days: p.nextDays };
+      if (p.newHistory.length) update.history = [...(p.client.history || []), ...p.newHistory];
+      try {
+        await db.collection("clients").doc(p.client.id).update(update);
+        ok++;
+        fields += p.fills.length;
+      } catch (err) {
+        fail++;
+      }
+    }
+    preview.innerHTML += `<p class="log">Concluído: ${fields} série(s) preenchida(s) em ${ok} aluno(s)${fail ? `, ${fail} falharam` : ""}.</p>`;
+    clientsCache = null;
+    await loadClients();
+  };
+}
+
+$("#weekfill-history").onclick = async () => {
+  $("#weekfill-preview").innerHTML = `<p class="spinner-note">Verificando...</p>`;
+  const clients = await loadClients();
+  const sources = clients.map((c) => ({ clientId: c.id, entries: c.history || [], addToHistory: false }));
+  renderWeekFillPreview(sources, []);
+};
+
+function sheetRows(ws) {
+  const rows = [];
+  ws.eachRow({ includeEmpty: false }, (row) => rows.push(Array.from(row.values).slice(1)));
+  return rows;
+}
+
+$("#weekfill-file").onchange = async (e) => {
+  const files = [...e.target.files];
+  if (!files.length) return;
+  const preview = $("#weekfill-preview");
+  preview.innerHTML = `<p class="spinner-note">Lendo planilhas...</p>`;
+  const clients = await loadClients();
+  const entriesByClient = new Map();
+  const notes = [];
+
+  const addEntries = (name, rows, where) => {
+    const client = matchClientByName(clients, name);
+    if (!client) {
+      notes.push(`Não encontrei o aluno "${escapeHtml(name)}" (${escapeHtml(where)}) — ignorado.`);
+      return;
+    }
+    const entries = entriesFromSheetRows(rows);
+    if (!entriesByClient.has(client.id)) entriesByClient.set(client.id, []);
+    entriesByClient.get(client.id).push(...entries);
+  };
+
+  for (const file of files) {
+    try {
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(await file.arrayBuffer());
+      const single = workbook.getWorksheet("Histórico");
+      if (single) {
+        addEntries(studentNameFromFilename(file.name), sheetRows(single), file.name);
+      } else {
+        workbook.eachSheet((ws) => {
+          if (ws.name === "Resumo" || ws.name === "Treino atual") return;
+          addEntries(ws.name, sheetRows(ws), `${file.name}, aba ${ws.name}`);
+        });
+      }
+    } catch (err) {
+      notes.push(`Não consegui ler ${escapeHtml(file.name)}: ${escapeHtml(err.message)}`);
+    }
+  }
+
+  const sources = [...entriesByClient].map(([clientId, entries]) => ({ clientId, entries, addToHistory: true }));
+  if (!sources.length) {
+    preview.innerHTML = notes.map((n) => `<p class="log">${n}</p>`).join("") + `<p class="log" style="color:var(--red);">Nenhum aluno reconhecido nas planilhas.</p>`;
+    return;
+  }
+  renderWeekFillPreview(sources, notes);
+  e.target.value = "";
 };
 </script>
 </body>
