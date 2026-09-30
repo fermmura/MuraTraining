@@ -1376,7 +1376,7 @@ function clientAreaHTMLInner(client, editable) {
               <button class="dashed-btn" id="open-cardio"><i class="ti ti-heart-rate-monitor"></i> Cardio</button>
               <button class="dashed-btn" id="open-progression"><i class="ti ti-chart-line"></i> Progressão</button>
               ${editable ? `<button class="dashed-btn" id="open-muscle"><i class="ti ti-chart-donut-3"></i> Volume muscular</button>` : ""}
-              <button class="dashed-btn" id="open-feedback" style="position:relative;"><i class="ti ti-message-circle"></i> Feedbacks${(client.feedback || []).some(f => !f.read) ? '<span style="position:absolute;top:-4px;right:-4px;width:12px;height:12px;background:var(--red);border-radius:50%;border:2px solid var(--panel);box-shadow:0 0 6px var(--red);"></span>' : ''}</button>
+              <button class="dashed-btn" id="open-feedback" style="position:relative;"><i class="ti ti-message-circle"></i> Feedbacks${(client.feedback || []).some(f => !f.read && f.from !== (editable ? "treinador" : "aluno")) ? '<span style="position:absolute;top:-4px;right:-4px;width:12px;height:12px;background:var(--red);border-radius:50%;border:2px solid var(--panel);box-shadow:0 0 6px var(--red);"></span>' : ''}</button>
             </div>`
           : ""
       }
@@ -1752,10 +1752,14 @@ function wireClientAreaInner(client, editable) {
   const openFeedbackBtn = document.getElementById("open-feedback");
   if (openFeedbackBtn) {
     openFeedbackBtn.onclick = () => {
-      // Mark all feedbacks as read when opening
-      const hasUnread = (client.feedback || []).some(f => !f.read);
+      // marca como lidas só as mensagens do outro lado: cada mensagem tem um único
+      // destinatário, quem não a escreveu. Marcar todas apagava o aviso do outro
+      // lado assim que quem escreveu reabria a conversa.
+      const who = editable ? "treinador" : "aluno";
+      const isUnreadForMe = (f) => !f.read && f.from !== who;
+      const hasUnread = (client.feedback || []).some(isUnreadForMe);
       if (hasUnread) {
-        const updated = (client.feedback || []).map(f => ({ ...f, read: true }));
+        const updated = (client.feedback || []).map(f => (isUnreadForMe(f) ? { ...f, read: true } : f));
         saveClient(client.id, { feedback: updated });
       }
       ui.feedbackOpen = true;
