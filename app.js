@@ -767,7 +767,7 @@ function render() {
       const evolBtn = el("enter-evolucao");
       if (evolBtn) evolBtn.onclick = () => { ui.progOpen = true; render(); };
       const feedbackBtn = el("enter-feedback");
-      if (feedbackBtn) feedbackBtn.onclick = () => { ui.feedbackOpen = true; render(); };
+      if (feedbackBtn) feedbackBtn.onclick = () => { markFeedbackReadFor(myClient, "aluno"); ui.feedbackOpen = true; render(); };
     } else {
       wireClientArea(myClient, false);
     }
@@ -1186,9 +1186,10 @@ function studentHTML() {
           </button>
         </div>
 
-        <button id="enter-feedback" class="home-btn home-glow-muted">
+        <button id="enter-feedback" class="home-btn home-glow-muted" style="position:relative;">
           <i class="ti ti-message-circle"></i>
           <span class="display">Feedbacks / Observações</span>
+          ${hasUnreadFeedbackFor(myClient, "aluno") ? unreadDotHTML() : ""}
         </button>
       </div>`;
   }
@@ -1376,7 +1377,7 @@ function clientAreaHTMLInner(client, editable) {
               <button class="dashed-btn" id="open-cardio"><i class="ti ti-heart-rate-monitor"></i> Cardio</button>
               <button class="dashed-btn" id="open-progression"><i class="ti ti-chart-line"></i> Progressão</button>
               ${editable ? `<button class="dashed-btn" id="open-muscle"><i class="ti ti-chart-donut-3"></i> Volume muscular</button>` : ""}
-              <button class="dashed-btn" id="open-feedback" style="position:relative;"><i class="ti ti-message-circle"></i> Feedbacks${(client.feedback || []).some(f => !f.read && f.from !== (editable ? "treinador" : "aluno")) ? '<span style="position:absolute;top:-4px;right:-4px;width:12px;height:12px;background:var(--red);border-radius:50%;border:2px solid var(--panel);box-shadow:0 0 6px var(--red);"></span>' : ''}</button>
+              <button class="dashed-btn" id="open-feedback" style="position:relative;"><i class="ti ti-message-circle"></i> Feedbacks${hasUnreadFeedbackFor(client, editable ? "treinador" : "aluno") ? unreadDotHTML() : ""}</button>
             </div>`
           : ""
       }
@@ -1752,16 +1753,7 @@ function wireClientAreaInner(client, editable) {
   const openFeedbackBtn = document.getElementById("open-feedback");
   if (openFeedbackBtn) {
     openFeedbackBtn.onclick = () => {
-      // marca como lidas só as mensagens do outro lado: cada mensagem tem um único
-      // destinatário, quem não a escreveu. Marcar todas apagava o aviso do outro
-      // lado assim que quem escreveu reabria a conversa.
-      const who = editable ? "treinador" : "aluno";
-      const isUnreadForMe = (f) => !f.read && f.from !== who;
-      const hasUnread = (client.feedback || []).some(isUnreadForMe);
-      if (hasUnread) {
-        const updated = (client.feedback || []).map(f => (isUnreadForMe(f) ? { ...f, read: true } : f));
-        saveClient(client.id, { feedback: updated });
-      }
+      markFeedbackReadFor(client, editable ? "treinador" : "aluno");
       ui.feedbackOpen = true;
       render();
     };
@@ -3242,6 +3234,27 @@ function wireCardio(client, editable) {
 // ---------- feedbacks / observações ----------
 
 const WHATSAPP_NUMBER = "5519993150750"; // 55 (Brasil) + 19 (DDD) + número, sem espaços/traços
+
+function unreadDotHTML() {
+  return '<span style="position:absolute;top:-4px;right:-4px;width:12px;height:12px;background:var(--red);border-radius:50%;border:2px solid var(--panel);box-shadow:0 0 6px var(--red);"></span>';
+}
+
+// Cada mensagem tem um único destinatário: quem não a escreveu. Marcar todas
+// como lidas apagava o aviso do outro lado assim que quem escreveu reabria a
+// conversa. É a mesma regra do 2.0, que grava nos mesmos campos.
+function isFeedbackUnreadFor(f, who) {
+  return !f.read && f.from !== who;
+}
+
+function hasUnreadFeedbackFor(client, who) {
+  return (client.feedback || []).some((f) => isFeedbackUnreadFor(f, who));
+}
+
+function markFeedbackReadFor(client, who) {
+  if (!hasUnreadFeedbackFor(client, who)) return;
+  const updated = client.feedback.map((f) => (isFeedbackUnreadFor(f, who) ? { ...f, read: true } : f));
+  saveClient(client.id, { feedback: updated });
+}
 
 function feedbackHTML(client, editable) {
   const entries = [...(client.feedback || [])].sort((a, b) => a.dateKey.localeCompare(b.dateKey));
