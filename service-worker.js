@@ -1,4 +1,4 @@
-const CACHE = "meu-treino-v78";
+const CACHE = "meu-treino-v79";
 const CORE_FILES = [
   "./index.html",
   "./app.js",
@@ -9,7 +9,14 @@ const CORE_FILES = [
 ];
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(CORE_FILES)));
+  // `cache: "reload"` busca na rede, e não no cache HTTP do navegador. O GitHub
+  // Pages responde com max-age=600: sem isso, uma versão nova do cache podia
+  // nascer com o app.js antigo dentro e prendê-lo até a próxima versão.
+  event.waitUntil(
+    caches.open(CACHE).then((cache) =>
+      cache.addAll(CORE_FILES.map((f) => new Request(f, { cache: "reload" })))
+    )
+  );
   self.skipWaiting();
 });
 
