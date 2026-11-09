@@ -695,6 +695,29 @@ function reapplyPendingPlanEdit() {
   );
 }
 
+// Cada campo da tela guarda o `client` do último DESENHO da tela. Só que, com
+// um campo em uso, o redesenho fica na fila (veja `renderFromSync`) — então ao
+// passar de um campo direto pro outro, sem Enter no meio, o segundo campo
+// ainda carrega o aluno de ANTES da primeira alteração. Como toda gravação
+// manda o array `days` inteiro, a segunda alteração regravava a primeira por
+// cima: o que o treinador acabou de escrever "voltava ao normal".
+// Antes de gravar, os campos pedem aqui a versão mais nova do aluno, que já
+// inclui o que foi salvo um instante atrás.
+function latestClient(client) {
+  if (!client) return client;
+  if (client.__planId) {
+    // plano de semana futura: o rascunho em memória é o mais novo de todos
+    if (pendingPlanEdit && pendingPlanEdit.clientId === client.id && pendingPlanEdit.planId === client.__planId) {
+      return { ...client, days: pendingPlanEdit.days };
+    }
+    const parent = clients.find((c) => c.id === client.id);
+    const plan = parent && (parent.weekPlans || []).find((p) => p.id === client.__planId);
+    return plan ? { ...client, days: plan.days } : client;
+  }
+  const fresh = isTrainer ? clients.find((c) => c.id === client.id) : myClient && myClient.id === client.id ? myClient : null;
+  return fresh || client;
+}
+
 function updateDays(client, nextDays) {
   if (client.__planId) {
     // editando um plano de semana futura: atualiza a cópia local e manda salvar
@@ -776,6 +799,27 @@ function commitFocusedField() {
 // fechar, minimizar ou trocar de aba também apaga o que estava sendo digitado
 document.addEventListener("visibilitychange", () => { if (document.hidden) commitFocusedField(); });
 window.addEventListener("pagehide", () => commitFocusedField());
+
+// Tocar numa área vazia da tela confirma o campo em edição. No computador o
+// clique fora já tira o foco sozinho, mas no iPhone tocar numa área sem nada
+// não tira: o teclado continua aberto e o `change` (que é quem grava) só
+// dispara mais tarde, de surpresa — daí a sensação de que só o Enter salva.
+// A confirmação espera um instante DEPOIS do toque, pra o clique de um botão
+// ou de um cartão acontecer antes e nunca se perder por causa de um redesenho.
+document.addEventListener("pointerup", (e) => {
+  const field = document.activeElement;
+  if (!field || (field.tagName !== "INPUT" && field.tagName !== "TEXTAREA")) return;
+  if (!field.closest || !field.closest("#app")) return;
+  const t = e.target;
+  // tocar em outro campo ou em algo clicável segue o caminho normal
+  if (!t || !t.closest || t.closest("input, textarea, select, button, a, label, [data-feitoopen], .cal-row")) return;
+  setTimeout(() => {
+    if (document.activeElement !== field) return; // já foi confirmado por outro caminho
+    const mudou = field.value !== field.defaultValue;
+    commitFocusedField();
+    if (mudou) showSavedToast();
+  }, 60);
+});
 
 // Enter confirma o que está sendo digitado, no computador e no celular.
 // Quem grava é o evento `change`, e ele só acontece quando o campo perde o
@@ -1967,7 +2011,7 @@ function wireClientAreaInner(client, editable) {
 
   const dayTitleInput = el("day-title-input");
   if (dayTitleInput) dayTitleInput.onchange = () => {
-    const days = (client.days || []).map((d) => (d.id === ui.activeDayId ? { ...d, title: dayTitleInput.value } : d));
+    const days = (latestClient(client).days || []).map((d) => (d.id === ui.activeDayId ? { ...d, title: dayTitleInput.value } : d));
     updateDays(client, days);
   };
 
@@ -2034,7 +2078,7 @@ function wireClientAreaInner(client, editable) {
       if (input.closest(".set-row")) return; // séries tratadas abaixo
       input.onchange = () => {
         const field = input.dataset.field;
-        const days = (client.days || []).map((d) => {
+        const days = (latestClient(client).days || []).map((d) => {
           if (d.id !== ui.activeDayId) return d;
           return {
             ...d,
@@ -2165,7 +2209,7 @@ function wireClientAreaInner(client, editable) {
     const noteInput = card.querySelector(`[data-studentnote="${exId}"]`);
     if (noteInput) {
       noteInput.onchange = () => {
-        const days = (client.days || []).map((d) => {
+        const days = (latestClient(client).days || []).map((d) => {
           if (d.id !== ui.activeDayId) return d;
           return {
             ...d,
@@ -2387,6 +2431,7 @@ function applySetFieldChange(client, dayId, exId, setId, field, value) {
 }
 
 function saveSetField(client, dayId, exId, setId, field, value) {
+  client = latestClient(client); // veja `latestClient`: nunca gravar em cima de uma cópia velha
   if (client.__planId) {
     // plano futuro: só atualiza o próprio plano, sem registrar histórico
     // (nada foi "feito" de verdade ainda)
