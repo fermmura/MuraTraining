@@ -93,7 +93,7 @@ auth.onAuthStateChanged((user) => {
         // memória — reaplica ele por cima dos dados que acabaram de chegar,
         // senão cada série que o aluno registra apaga o planejamento em curso
         reapplyPendingPlanEdit();
-        clients.forEach((c) => maybePromoteWeek(c));
+        clients.forEach((c) => maybePromoteWeek(c, snap.metadata.fromCache));
         renderFromSync();
       },
       (e) => handleSyncError(e)
@@ -107,7 +107,7 @@ auth.onAuthStateChanged((user) => {
         (snap) => {
           myClient = snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() };
           if (myClient) {
-            maybePromoteWeek(myClient);
+            maybePromoteWeek(myClient, snap.metadata.fromCache);
             if (!lastSeenRecorded) {
               lastSeenRecorded = true;
               db.collection("clients").doc(myClient.id).update({ lastSeen: Date.now() }).catch(() => {});
@@ -337,11 +337,15 @@ async function clonePhotosForNewIds(clientId, clonedDays, photoPairs) {
 // pronto pra essa semana, promove ele automaticamente pra virar o treino atual —
 // sem precisar de nenhum clique do treinador
 const promotedThisSession = new Set();
-// A carga do último treino aparece na tela do plano, mas o que vale pro aluno é
-// o que está gravado. Antes de o plano virar a semana atual, grava nele as
-// cargas de referência — sem isso o treinador vê 42,5 no planejamento e o aluno
-// recebe os 40 que vieram da cópia.
+// A carga e as repetições do último treino aparecem na tela do plano, mas o que
+// vale pro aluno é o que está gravado. Antes de o plano virar a semana atual,
+// grava nele as referências — sem isso o treinador vê 42,5 no planejamento e o
+// aluno recebe os 40 que vieram da cópia, e o número esmaecido ficaria com o
+// que valia quando o plano foi criado, não com o que o aluno fez depois.
 function withRefLoads(client, planDays, planWeekKey) {
+  // o índice só é refeito quando a tela é redesenhada, e a virada roda antes
+  // disso — descarta o que estiver guardado pra não ler um histórico velho
+  lastDoneIndexCache = { key: "", map: new Map() };
   const idx = lastDoneIndex(client, planWeekKey);
   if (!idx.size) return planDays;
   return (planDays || []).map((d) => ({
@@ -349,19 +353,70 @@ function withRefLoads(client, planDays, planWeekKey) {
     exercises: (d.exercises || []).map((ex) => ({
       ...ex,
       sets: (ex.sets || []).map((s, i) => {
-        if (s.loadSetByTrainer) return s; // carga prescrita pelo treinador manda
         const ref = idx.get((ex.name || "") + "|" + i);
-        return ref && ref.load ? { ...s, load: ref.load } : s;
+        if (!ref) return s;
+        const next = { ...s };
+        if (ref.repsDone) next.prevReps = ref.repsDone;
+        // carga prescrita pelo treinador manda
+        if (!s.loadSetByTrainer && ref.load) next.load = ref.load;
+        return next;
       }),
     })),
   }));
 }
 
-async function maybePromoteWeek(client) {
+// Virada de semana SEM plano pronto: os `days` continuam sendo fisicamente os
+// mesmos, com o "feito" da semana passada colado. Zera o "feito" e guarda o
+// número em `prevReps`, que a tela mostra esmaecido até o aluno digitar o novo.
+// Não perde nada: o número só muda de campo, e o histórico não é tocado.
+// Série que o aluno JÁ registrou na semana nova (tem entrada no histórico com
+// weekKey igual ou maior) fica como está.
+function withDoneReset(client, days, newWeekKey) {
+  const doneThisWeek = new Set();
+  for (const h of client.history || []) {
+    if (h.setId && h.repsDone && h.weekKey && h.weekKey >= newWeekKey) doneThisWeek.add(h.setId);
+  }
+  return (days || []).map((d) => ({
+    ...d,
+    exercises: (d.exercises || []).map((ex) => ({
+      ...ex,
+      sets: (ex.sets || []).map((s) => {
+        if (!s.repsDone || doneThisWeek.has(s.id)) return s;
+        return { ...s, repsDone: "", prevReps: s.repsDone };
+      }),
+    })),
+  }));
+}
+
+function hasAnyRepsDone(days) {
+  return (days || []).some((d) => (d.exercises || []).some((ex) => (ex.sets || []).some((s) => s.repsDone)));
+}
+
+// semana do último registro do aluno, ignorando semanas futuras (registros
+// gravados com a data errada pelo bug antigo do fuso). Serve pra descobrir de
+// que semana são os `days` quando a ficha não tem `activeWeekKey`.
+function latestHistoryWeekKey(client, currentKey) {
+  let latest = "";
+  for (const h of client.history || []) {
+    if (h.weekKey && h.weekKey <= currentKey && h.weekKey > latest) latest = h.weekKey;
+  }
+  return latest;
+}
+
+async function maybePromoteWeek(client, fromCache = false) {
+  // Nunca vira a semana a partir de dados que vieram só do cache do aparelho:
+  // a virada regrava `days` inteiro, e uma cópia velha (aparelho que ficou
+  // offline) apagaria o que o treinador ou o aluno mexeram nesse meio tempo.
+  // Quando o servidor responde, o snapshot seguinte chega sem `fromCache` e a
+  // virada acontece nessa hora.
+  if (fromCache) return;
   const currentKey = weekKeyOf(todayKey());
-  const activeKey = client.activeWeekKey || currentKey;
-  if (currentKey === activeKey) return;
+  // ficha sem `activeWeekKey` (criada direto, sem nunca ter aberto uma semana
+  // futura): antes a semana nunca virava. Agora deduz de que semana são os
+  // `days` pelo último registro; sem histórico, só carimba a semana de hoje.
+  const activeKey = client.activeWeekKey || latestHistoryWeekKey(client, currentKey) || currentKey;
   if (currentKey < activeKey) return; // segurança: nunca "volta" a semana
+  if (currentKey === activeKey && client.activeWeekKey) return; // nada a fazer
   const sessionFlag = client.id + ":" + currentKey;
   if (promotedThisSession.has(sessionFlag)) return;
   promotedThisSession.add(sessionFlag);
@@ -369,7 +424,11 @@ async function maybePromoteWeek(client) {
   const plans = client.weekPlans || [];
   const plan = plans.find((p) => p.weekKey === currentKey);
   try {
-    if (plan) {
+    let patch;
+    if (currentKey === activeKey) {
+      // só faltava a etiqueta da semana
+      patch = { activeWeekKey: currentKey };
+    } else if (plan) {
       const nextPlans = plans.filter((p) => p.id !== plan.id);
       // limpeza: planos salvos antes da correção podem ter vindo com o
       // cronômetro de outro dia colado neles. A semana nova sempre começa parada.
@@ -377,10 +436,17 @@ async function maybePromoteWeek(client) {
         const { timerStartedAt, ...rest } = d;
         return rest;
       });
-      await saveClient(client.id, { days: freshDays, activeWeekKey: currentKey, weekPlans: nextPlans });
+      patch = { days: freshDays, activeWeekKey: currentKey, weekPlans: nextPlans };
+    } else if (hasAnyRepsDone(client.days)) {
+      patch = { days: withDoneReset(client, client.days, currentKey), activeWeekKey: currentKey };
     } else {
-      await saveClient(client.id, { activeWeekKey: currentKey });
+      // nada pra zerar: não regrava `days`, só troca a etiqueta
+      patch = { activeWeekKey: currentKey };
     }
+    // se falhar, `saveClient` já avisa; não repete a tentativa a cada
+    // atualização (cada falha mostraria o aviso de novo) — tenta na próxima
+    // vez que o app for aberto
+    await saveClient(client.id, patch);
   } catch (e) {
     promotedThisSession.delete(sessionFlag); // libera pra tentar de novo depois
   }
