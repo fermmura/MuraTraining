@@ -93,7 +93,7 @@ auth.onAuthStateChanged((user) => {
         // memória — reaplica ele por cima dos dados que acabaram de chegar,
         // senão cada série que o aluno registra apaga o planejamento em curso
         reapplyPendingPlanEdit();
-        clients.forEach((c) => maybePromoteWeek(c));
+        clients.forEach((c) => maybePromoteWeek(c, snap.metadata.fromCache));
         renderFromSync();
       },
       (e) => handleSyncError(e)
@@ -107,7 +107,7 @@ auth.onAuthStateChanged((user) => {
         (snap) => {
           myClient = snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() };
           if (myClient) {
-            maybePromoteWeek(myClient);
+            maybePromoteWeek(myClient, snap.metadata.fromCache);
             if (!lastSeenRecorded) {
               lastSeenRecorded = true;
               db.collection("clients").doc(myClient.id).update({ lastSeen: Date.now() }).catch(() => {});
@@ -337,11 +337,15 @@ async function clonePhotosForNewIds(clientId, clonedDays, photoPairs) {
 // pronto pra essa semana, promove ele automaticamente pra virar o treino atual —
 // sem precisar de nenhum clique do treinador
 const promotedThisSession = new Set();
-// A carga do último treino aparece na tela do plano, mas o que vale pro aluno é
-// o que está gravado. Antes de o plano virar a semana atual, grava nele as
-// cargas de referência — sem isso o treinador vê 42,5 no planejamento e o aluno
-// recebe os 40 que vieram da cópia.
+// A carga e as repetições do último treino aparecem na tela do plano, mas o que
+// vale pro aluno é o que está gravado. Antes de o plano virar a semana atual,
+// grava nele as referências — sem isso o treinador vê 42,5 no planejamento e o
+// aluno recebe os 40 que vieram da cópia, e o número esmaecido ficaria com o
+// que valia quando o plano foi criado, não com o que o aluno fez depois.
 function withRefLoads(client, planDays, planWeekKey) {
+  // o índice só é refeito quando a tela é redesenhada, e a virada roda antes
+  // disso — descarta o que estiver guardado pra não ler um histórico velho
+  lastDoneIndexCache = { key: "", map: new Map() };
   const idx = lastDoneIndex(client, planWeekKey);
   if (!idx.size) return planDays;
   return (planDays || []).map((d) => ({
@@ -349,19 +353,70 @@ function withRefLoads(client, planDays, planWeekKey) {
     exercises: (d.exercises || []).map((ex) => ({
       ...ex,
       sets: (ex.sets || []).map((s, i) => {
-        if (s.loadSetByTrainer) return s; // carga prescrita pelo treinador manda
         const ref = idx.get((ex.name || "") + "|" + i);
-        return ref && ref.load ? { ...s, load: ref.load } : s;
+        if (!ref) return s;
+        const next = { ...s };
+        if (ref.repsDone) next.prevReps = ref.repsDone;
+        // carga prescrita pelo treinador manda
+        if (!s.loadSetByTrainer && ref.load) next.load = ref.load;
+        return next;
       }),
     })),
   }));
 }
 
-async function maybePromoteWeek(client) {
+// Virada de semana SEM plano pronto: os `days` continuam sendo fisicamente os
+// mesmos, com o "feito" da semana passada colado. Zera o "feito" e guarda o
+// número em `prevReps`, que a tela mostra esmaecido até o aluno digitar o novo.
+// Não perde nada: o número só muda de campo, e o histórico não é tocado.
+// Série que o aluno JÁ registrou na semana nova (tem entrada no histórico com
+// weekKey igual ou maior) fica como está.
+function withDoneReset(client, days, newWeekKey) {
+  const doneThisWeek = new Set();
+  for (const h of client.history || []) {
+    if (h.setId && h.repsDone && h.weekKey && h.weekKey >= newWeekKey) doneThisWeek.add(h.setId);
+  }
+  return (days || []).map((d) => ({
+    ...d,
+    exercises: (d.exercises || []).map((ex) => ({
+      ...ex,
+      sets: (ex.sets || []).map((s) => {
+        if (!s.repsDone || doneThisWeek.has(s.id)) return s;
+        return { ...s, repsDone: "", prevReps: s.repsDone };
+      }),
+    })),
+  }));
+}
+
+function hasAnyRepsDone(days) {
+  return (days || []).some((d) => (d.exercises || []).some((ex) => (ex.sets || []).some((s) => s.repsDone)));
+}
+
+// semana do último registro do aluno, ignorando semanas futuras (registros
+// gravados com a data errada pelo bug antigo do fuso). Serve pra descobrir de
+// que semana são os `days` quando a ficha não tem `activeWeekKey`.
+function latestHistoryWeekKey(client, currentKey) {
+  let latest = "";
+  for (const h of client.history || []) {
+    if (h.weekKey && h.weekKey <= currentKey && h.weekKey > latest) latest = h.weekKey;
+  }
+  return latest;
+}
+
+async function maybePromoteWeek(client, fromCache = false) {
+  // Nunca vira a semana a partir de dados que vieram só do cache do aparelho:
+  // a virada regrava `days` inteiro, e uma cópia velha (aparelho que ficou
+  // offline) apagaria o que o treinador ou o aluno mexeram nesse meio tempo.
+  // Quando o servidor responde, o snapshot seguinte chega sem `fromCache` e a
+  // virada acontece nessa hora.
+  if (fromCache) return;
   const currentKey = weekKeyOf(todayKey());
-  const activeKey = client.activeWeekKey || currentKey;
-  if (currentKey === activeKey) return;
+  // ficha sem `activeWeekKey` (criada direto, sem nunca ter aberto uma semana
+  // futura): antes a semana nunca virava. Agora deduz de que semana são os
+  // `days` pelo último registro; sem histórico, só carimba a semana de hoje.
+  const activeKey = client.activeWeekKey || latestHistoryWeekKey(client, currentKey) || currentKey;
   if (currentKey < activeKey) return; // segurança: nunca "volta" a semana
+  if (currentKey === activeKey && client.activeWeekKey) return; // nada a fazer
   const sessionFlag = client.id + ":" + currentKey;
   if (promotedThisSession.has(sessionFlag)) return;
   promotedThisSession.add(sessionFlag);
@@ -369,7 +424,11 @@ async function maybePromoteWeek(client) {
   const plans = client.weekPlans || [];
   const plan = plans.find((p) => p.weekKey === currentKey);
   try {
-    if (plan) {
+    let patch;
+    if (currentKey === activeKey) {
+      // só faltava a etiqueta da semana
+      patch = { activeWeekKey: currentKey };
+    } else if (plan) {
       const nextPlans = plans.filter((p) => p.id !== plan.id);
       // limpeza: planos salvos antes da correção podem ter vindo com o
       // cronômetro de outro dia colado neles. A semana nova sempre começa parada.
@@ -377,10 +436,17 @@ async function maybePromoteWeek(client) {
         const { timerStartedAt, ...rest } = d;
         return rest;
       });
-      await saveClient(client.id, { days: freshDays, activeWeekKey: currentKey, weekPlans: nextPlans });
+      patch = { days: freshDays, activeWeekKey: currentKey, weekPlans: nextPlans };
+    } else if (hasAnyRepsDone(client.days)) {
+      patch = { days: withDoneReset(client, client.days, currentKey), activeWeekKey: currentKey };
     } else {
-      await saveClient(client.id, { activeWeekKey: currentKey });
+      // nada pra zerar: não regrava `days`, só troca a etiqueta
+      patch = { activeWeekKey: currentKey };
     }
+    // se falhar, `saveClient` já avisa; não repete a tentativa a cada
+    // atualização (cada falha mostraria o aviso de novo) — tenta na próxima
+    // vez que o app for aberto
+    await saveClient(client.id, patch);
   } catch (e) {
     promotedThisSession.delete(sessionFlag); // libera pra tentar de novo depois
   }
@@ -629,6 +695,29 @@ function reapplyPendingPlanEdit() {
   );
 }
 
+// Cada campo da tela guarda o `client` do último DESENHO da tela. Só que, com
+// um campo em uso, o redesenho fica na fila (veja `renderFromSync`) — então ao
+// passar de um campo direto pro outro, sem Enter no meio, o segundo campo
+// ainda carrega o aluno de ANTES da primeira alteração. Como toda gravação
+// manda o array `days` inteiro, a segunda alteração regravava a primeira por
+// cima: o que o treinador acabou de escrever "voltava ao normal".
+// Antes de gravar, os campos pedem aqui a versão mais nova do aluno, que já
+// inclui o que foi salvo um instante atrás.
+function latestClient(client) {
+  if (!client) return client;
+  if (client.__planId) {
+    // plano de semana futura: o rascunho em memória é o mais novo de todos
+    if (pendingPlanEdit && pendingPlanEdit.clientId === client.id && pendingPlanEdit.planId === client.__planId) {
+      return { ...client, days: pendingPlanEdit.days };
+    }
+    const parent = clients.find((c) => c.id === client.id);
+    const plan = parent && (parent.weekPlans || []).find((p) => p.id === client.__planId);
+    return plan ? { ...client, days: plan.days } : client;
+  }
+  const fresh = isTrainer ? clients.find((c) => c.id === client.id) : myClient && myClient.id === client.id ? myClient : null;
+  return fresh || client;
+}
+
 function updateDays(client, nextDays) {
   if (client.__planId) {
     // editando um plano de semana futura: atualiza a cópia local e manda salvar
@@ -710,6 +799,27 @@ function commitFocusedField() {
 // fechar, minimizar ou trocar de aba também apaga o que estava sendo digitado
 document.addEventListener("visibilitychange", () => { if (document.hidden) commitFocusedField(); });
 window.addEventListener("pagehide", () => commitFocusedField());
+
+// Tocar numa área vazia da tela confirma o campo em edição. No computador o
+// clique fora já tira o foco sozinho, mas no iPhone tocar numa área sem nada
+// não tira: o teclado continua aberto e o `change` (que é quem grava) só
+// dispara mais tarde, de surpresa — daí a sensação de que só o Enter salva.
+// A confirmação espera um instante DEPOIS do toque, pra o clique de um botão
+// ou de um cartão acontecer antes e nunca se perder por causa de um redesenho.
+document.addEventListener("pointerup", (e) => {
+  const field = document.activeElement;
+  if (!field || (field.tagName !== "INPUT" && field.tagName !== "TEXTAREA")) return;
+  if (!field.closest || !field.closest("#app")) return;
+  const t = e.target;
+  // tocar em outro campo ou em algo clicável segue o caminho normal
+  if (!t || !t.closest || t.closest("input, textarea, select, button, a, label, [data-feitoopen], .cal-row")) return;
+  setTimeout(() => {
+    if (document.activeElement !== field) return; // já foi confirmado por outro caminho
+    const mudou = field.value !== field.defaultValue;
+    commitFocusedField();
+    if (mudou) showSavedToast();
+  }, 60);
+});
 
 // Enter confirma o que está sendo digitado, no computador e no celular.
 // Quem grava é o evento `change`, e ele só acontece quando o campo perde o
@@ -1901,7 +2011,7 @@ function wireClientAreaInner(client, editable) {
 
   const dayTitleInput = el("day-title-input");
   if (dayTitleInput) dayTitleInput.onchange = () => {
-    const days = (client.days || []).map((d) => (d.id === ui.activeDayId ? { ...d, title: dayTitleInput.value } : d));
+    const days = (latestClient(client).days || []).map((d) => (d.id === ui.activeDayId ? { ...d, title: dayTitleInput.value } : d));
     updateDays(client, days);
   };
 
@@ -1968,7 +2078,7 @@ function wireClientAreaInner(client, editable) {
       if (input.closest(".set-row")) return; // séries tratadas abaixo
       input.onchange = () => {
         const field = input.dataset.field;
-        const days = (client.days || []).map((d) => {
+        const days = (latestClient(client).days || []).map((d) => {
           if (d.id !== ui.activeDayId) return d;
           return {
             ...d,
@@ -2099,7 +2209,7 @@ function wireClientAreaInner(client, editable) {
     const noteInput = card.querySelector(`[data-studentnote="${exId}"]`);
     if (noteInput) {
       noteInput.onchange = () => {
-        const days = (client.days || []).map((d) => {
+        const days = (latestClient(client).days || []).map((d) => {
           if (d.id !== ui.activeDayId) return d;
           return {
             ...d,
@@ -2321,6 +2431,7 @@ function applySetFieldChange(client, dayId, exId, setId, field, value) {
 }
 
 function saveSetField(client, dayId, exId, setId, field, value) {
+  client = latestClient(client); // veja `latestClient`: nunca gravar em cima de uma cópia velha
   if (client.__planId) {
     // plano futuro: só atualiza o próprio plano, sem registrar histórico
     // (nada foi "feito" de verdade ainda)
