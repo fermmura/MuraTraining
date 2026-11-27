@@ -219,6 +219,57 @@
   #import-modal .im-btn-secondary { color: var(--muted); padding: 9px 16px; font-size: 14px; }
   #import-modal .im-btn-primary { background: var(--red); color: #fff; border-radius: 8px; padding: 9px 18px; font-size: 14px; font-weight: 600; }
 
+  /* modal de importar treino por imagem */
+  #img-import-modal.hidden { display: none; }
+  #img-import-modal { position: fixed; inset: 0; z-index: 75; }
+  #img-import-modal .im-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.65); }
+  #img-import-modal .im-card { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
+    background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px;
+    width: 94vw; max-width: 560px; max-height: 90vh; overflow-y: auto; display: flex; flex-direction: column; gap: 12px;
+    box-shadow: 0 12px 32px rgba(0,0,0,.5); }
+  #img-import-modal .im-title { font-size: 17px; font-weight: 700; }
+  #img-import-modal .im-hint { font-size: 12px; color: var(--muted); line-height: 1.5; margin: 0; }
+  #img-import-modal .im-actions { display: flex; justify-content: flex-end; gap: 10px; position: sticky; bottom: -18px; background: var(--panel); padding: 10px 0 2px; }
+  #img-import-modal .im-btn-secondary { color: var(--muted); padding: 11px 14px; font-size: 14px; min-height: 44px; }
+  #img-import-modal .im-btn-primary { background: var(--red); color: #fff; border-radius: 10px; padding: 11px 18px; font-size: 14px; font-weight: 700; min-height: 44px; }
+  #img-import-modal .im-btn-primary:disabled { opacity: .4; }
+  #img-import-modal .ii-zone { border: 2px dashed var(--red); border-radius: 14px; background: var(--bg); padding: 18px 14px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  #img-import-modal .ii-btn { width: 100%; min-height: 46px; border-radius: 12px; border: 1px solid var(--red); color: var(--chalk); font-size: 14px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 8px; }
+  #img-import-modal .ii-btn-ghost { border-color: var(--line); font-weight: 600; }
+  #img-import-modal .ii-thumbs { display: flex; gap: 8px; flex-wrap: wrap; }
+  #img-import-modal .ii-thumb { position: relative; width: 88px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--bg); }
+  #img-import-modal .ii-thumb img { display: block; width: 100%; height: 76px; object-fit: cover; }
+  #img-import-modal .ii-thumb-n { font-size: 11px; padding: 4px 6px; color: var(--muted); }
+  #img-import-modal .ii-thumb-x { position: absolute; top: 2px; right: 2px; width: 32px; height: 32px; border-radius: 50%; background: rgba(0,0,0,.65); color: #fff; display: flex; align-items: center; justify-content: center; }
+  #img-import-modal .ii-error { font-size: 12px; line-height: 1.45; color: #FF8A7A; border: 1px solid var(--redDim); background: rgba(255,68,51,.08); border-radius: 10px; padding: 9px 11px; }
+  #img-import-modal .ii-wait { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 28px 8px; text-align: center; font-size: 13px; color: var(--muted); }
+  #img-import-modal .ii-spin { animation: ii-spin 1s linear infinite; }
+  @keyframes ii-spin { to { transform: rotate(360deg); } }
+  #img-import-modal .ii-tabs { display: flex; gap: 8px; flex-wrap: wrap; }
+  #img-import-modal .ii-tab { min-height: 44px; padding: 0 16px; border-radius: 12px; border: 1px solid var(--line); color: var(--chalk); font-size: 14px; font-weight: 700; }
+  #img-import-modal .ii-tab.on { border-color: var(--red); background: rgba(255,68,51,.16); }
+  #img-import-modal .ii-daytitle { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--muted); }
+  #img-import-modal .ii-daytitle input { min-height: 44px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 0 12px; font-size: 15px; font-weight: 700; color: var(--chalk); }
+  #img-import-modal .ii-list { display: flex; flex-direction: column; gap: 8px; }
+  #img-import-modal .ii-row { display: flex; gap: 8px; align-items: flex-start; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); padding: 8px 10px 8px 4px; }
+  #img-import-modal .ii-row.warn { border-color: var(--plate); }
+  #img-import-modal .ii-row.off { opacity: .5; }
+  #img-import-modal .ii-check { width: 44px; min-height: 44px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  #img-import-modal .ii-check input { width: 22px; height: 22px; accent-color: var(--red); }
+  #img-import-modal .ii-fields { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+  #img-import-modal .ii-fields input, #img-import-modal .ii-fields select, #img-import-modal .ii-fields textarea { background: var(--panelAlt); border: 1px solid var(--line); border-radius: 8px; color: var(--chalk); font-size: 14px; padding: 8px 10px; min-height: 40px; font-family: inherit; }
+  #img-import-modal .ii-name { font-weight: 700; width: 100%; box-sizing: border-box; }
+  #img-import-modal .ii-line { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+  #img-import-modal .ii-num { width: 64px; text-align: center; }
+  #img-import-modal .ii-reps { width: 96px; text-align: center; }
+  #img-import-modal .ii-sel { width: 100%; box-sizing: border-box; }
+  #img-import-modal .ii-note { width: 100%; box-sizing: border-box; resize: vertical; line-height: 1.35; }
+  #img-import-modal .ii-aviso { font-size: 12px; color: var(--plate); line-height: 1.4; }
+  #img-import-modal .ii-empty { font-size: 13px; color: var(--muted); padding: 14px 4px; }
+  #img-import-modal .ii-done { display: flex; flex-direction: column; gap: 8px; }
+  #img-import-modal .ii-done-row { display: flex; justify-content: space-between; gap: 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); padding: 12px 14px; font-size: 14px; font-weight: 700; }
+  #img-import-modal .ii-done-row span:last-child { font-weight: 400; font-size: 12px; color: var(--muted); }
+
   /* visualizador de foto em tela cheia */
   #photo-viewer-modal.hidden { display: none; }
   #photo-viewer-modal { position: fixed; inset: 0; z-index: 80; }
@@ -253,6 +304,11 @@
         <button id="im-confirm" class="im-btn-primary">Importar</button>
       </div>
     </div>
+  </div>
+
+  <div id="img-import-modal" class="hidden">
+    <div class="im-backdrop" id="ii-backdrop"></div>
+    <div class="im-card" id="ii-card" role="dialog" aria-modal="true" aria-label="Importar treino por imagem"></div>
   </div>
 
   <div id="dup-modal" class="hidden">

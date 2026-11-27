@@ -1539,6 +1539,7 @@ function clientAreaHTMLInner(client, editable) {
              </button>
              <div id="more-actions" class="hidden" style="display:flex; flex-direction:column; gap:8px; margin-bottom:12px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px;">
                <button class="dashed-btn" id="open-import-modal"><i class="ti ti-clipboard-text"></i> Importar treino (colar texto)</button>
+               <button class="dashed-btn" id="open-img-import"><i class="ti ti-photo"></i> Importar treino (por imagem)</button>
                <button class="dashed-btn" id="open-duplicate"><i class="ti ti-copy"></i> Duplicar treinos p/ outro aluno</button>
                <div style="display:flex; gap:8px; flex-wrap:wrap;">
                  <button class="dashed-btn" id="rir-unlock-all" style="flex:1;color:var(--plate);border-color:var(--plate);"><i class="ti ti-lock-open"></i> Liberar RIR de tudo p/ ${escapeHTML(client.name.split(" ")[0])}</button>
@@ -1916,6 +1917,7 @@ function wireClientAreaInner(client, editable) {
   if (editable && !client.__planId) {
     wireImportModal(client);
     wireDuplicateModal(client);
+    wireImgImport(client);
   }
   wirePhotoViewerModal();
 
@@ -2772,6 +2774,183 @@ function parseWorkoutText(text) {
   return days;
 }
 
+// ---------- importar treino por imagem (leitura de texto / OCR) ----------
+// O print de outro app vira texto no próprio aparelho (nada é enviado pra fora)
+// e este bloco transforma o texto em dias/exercícios. Sempre passa por uma tela
+// de conferência antes de salvar, porque o OCR erra de vez em quando.
+
+// Print de app costuma ser texto claro em fundo escuro, e o leitor lê bem melhor
+// texto escuro em fundo claro. Nos testes com prints reais, inverter + tons de
+// cinza SEM ampliar a imagem foi o que menos errou (ampliar piorou).
+function ocrPrepareRGBA(data) {
+  const px = data.length / 4;
+  let sum = 0;
+  for (let i = 0; i < data.length; i += 4) sum += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+  const dark = sum / px < 128;
+  for (let i = 0; i < data.length; i += 4) {
+    const g = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+    const v = dark ? 255 - g : g;
+    data[i] = v;
+    data[i + 1] = v;
+    data[i + 2] = v;
+    data[i + 3] = 255;
+  }
+  return dark;
+}
+
+// o OCR costuma "comer" o traço de "6–15" e entregar "615". Procura a divisão que
+// faz sentido (mínimo menor que o máximo, sem zero à esquerda, máximo até 99).
+function splitGluedRange(digits) {
+  for (let i = 1; i < digits.length; i++) {
+    const a = digits.slice(0, i);
+    const b = digits.slice(i);
+    if (a[0] === "0" || b[0] === "0") continue;
+    const x = parseInt(a, 10);
+    const y = parseInt(b, 10);
+    if (x >= 1 && y <= 99 && x < y) return [x, y];
+  }
+  return null;
+}
+
+const OCR_DASH = "[-\\u2013\\u2014\\u2012\\u2212~]";
+
+// reconhece a linha de séries: "4 séries · 6–15 repetições", "3 séries" ou "3x8-12"
+function parseSetsLine(line) {
+  const cnt = line.match(/(\d{1,2})\s*s[eé]r[ií1l]es?\b/i);
+  if (cnt) {
+    const count = parseInt(cnt[1], 10);
+    const rest = line.slice(cnt.index + cnt[0].length).replace(/^[\s·•.,:;|\-–—‒−]+/, "");
+    let reps = "";
+    const avisos = [];
+    const range = rest.match(new RegExp("^(\\d{1,3})\\s*" + OCR_DASH + "+\\s*(\\d{1,3})\\b"));
+    const glued = rest.match(/^(\d{3,4})\b/);
+    const single = rest.match(/^(\d{1,3})\b/);
+    if (range) {
+      const a = parseInt(range[1], 10);
+      const b = parseInt(range[2], 10);
+      reps = a === b ? String(a) : `${a}-${b}`;
+      if (a > b) avisos.push(`repetições "${a}-${b}": o mínimo ficou maior que o máximo`);
+    } else if (glued) {
+      const split = splitGluedRange(glued[1]);
+      if (split) {
+        reps = `${split[0]}-${split[1]}`;
+        avisos.push(`li "${glued[1]}" e entendi como ${reps} repetições`);
+      } else {
+        reps = glued[1];
+        avisos.push(`repetições "${glued[1]}" parecem estranhas`);
+      }
+    } else if (single) {
+      reps = single[1];
+    }
+    return { count, reps, avisos };
+  }
+  const x = line.match(/(\d{1,2})\s*[x×]\s*(\d{1,3})(?:\s*(?:-|–|—)\s*(\d{1,3}))?(?!\d)/i);
+  if (x) {
+    const reps = x[3] ? `${x[2]}-${x[3]}` : x[2];
+    return { count: parseInt(x[1], 10), reps, avisos: [] };
+  }
+  return null;
+}
+
+const countLetters = (s) => (s.match(/\p{L}/gu) || []).length;
+
+function cleanOcrName(s) {
+  return s.replace(/^[^\p{L}\d(]+/u, "").replace(/\s+/g, " ").trim();
+}
+
+// tira o ícone de "anotação" que o OCR lê como "(3 " ou "C3 " no começo da linha
+function cleanOcrNote(s) {
+  return s
+    .replace(/^[(\[\x7b<]\s*\S{1,2}\s+/, "")
+    .replace(/^[^\p{L}\d]+/u, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// texto de UMA imagem -> lista de exercícios (rascunho, ainda editável na conferência)
+function parseImageWorkoutText(text) {
+  const lines = String(text || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const anchors = [];
+  lines.forEach((l, i) => {
+    const m = parseSetsLine(l);
+    if (m) anchors.push({ i, ...m });
+  });
+
+  // o nome é a última linha com texto antes da linha de séries
+  anchors.forEach((a, k) => {
+    const lo = k === 0 ? -1 : anchors[k - 1].i;
+    a.nameIdx = -1;
+    for (let j = a.i - 1; j > lo; j--) {
+      if (countLetters(lines[j]) >= 3) { a.nameIdx = j; break; }
+    }
+  });
+
+  const drafts = [];
+  anchors.forEach((a, k) => {
+    if (a.nameIdx < 0) return;
+    const next = anchors[k + 1];
+    const end = next && next.nameIdx >= 0 ? next.nameIdx : next ? next.i : lines.length;
+    const note = lines
+      .slice(a.i + 1, end)
+      .filter((l) => countLetters(l) >= 3 || /\d/.test(l))
+      .map(cleanOcrNote)
+      .filter((l) => countLetters(l) >= 2)
+      .join("; ");
+    const name = cleanOcrName(lines[a.nameIdx]);
+    const avisos = [...a.avisos];
+    if (a.count < 1 || a.count > 12) avisos.push(`${a.count} séries parece estranho`);
+    drafts.push({
+      id: uid(),
+      name,
+      count: a.count,
+      reps: a.reps,
+      note,
+      muscle: guessMuscle(name),
+      incluir: true,
+      confere: avisos.length > 0,
+      avisos,
+    });
+  });
+  return drafts;
+}
+
+// nome sugerido pro dia, pelo grupamento que mais aparece (ex.: "Peito e tríceps")
+function suggestDayTitle(drafts) {
+  const family = (m) => {
+    if (["Quadríceps", "Posterior de coxa", "Glúteo", "Adutores", "Panturrilha"].includes(m)) return "Pernas";
+    if (m === "Deltoide posterior") return "Ombro";
+    return m;
+  };
+  const counts = {};
+  drafts.forEach((d) => {
+    const f = family(d.muscle);
+    if (f) counts[f] = (counts[f] || 0) + 1;
+  });
+  const ranked = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  if (ranked.length === 0) return "";
+  const first = ranked[0][0];
+  if (ranked[1] && ranked[1][1] >= 2) return `${first} e ${ranked[1][0].toLowerCase()}`;
+  return first;
+}
+
+// rascunho já conferido -> exercício no formato que o app usa
+function exerciseFromDraft(d) {
+  const count = Math.max(1, Math.min(12, parseInt(d.count, 10) || 1));
+  const sets = [];
+  for (let n = 0; n < count; n++) {
+    sets.push({ id: uid(), repsGoal: String(d.reps || "").trim(), repsDone: "", load: "", intensity: 0, rir: "", rirEnabled: false });
+  }
+  const name = (d.name || "").trim();
+  return {
+    id: uid(),
+    name,
+    muscle: d.muscle || guessMuscle(name),
+    synergist: guessSynergist(name),
+    notes: (d.note || "").trim(),
+    sets,
+  };
+}
+
 function openPhotoViewer(url) {
   if (!url) return;
   document.getElementById("pv-img").src = url;
@@ -2829,6 +3008,369 @@ function wireImportModal(client) {
       closeImportModal();
     };
   }
+}
+
+// ---------- tela de importar treino por imagem ----------
+
+const OCR_SCRIPT_URL = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
+const OCR_LANG_URL = "https://cdn.jsdelivr.net/npm/@tesseract.js-data/por@1.0.0/4.0.0_best_int";
+const IMG_IMPORT_MAX_IMAGES = 6;
+
+let imgImport = null; // { client, step, images, days, dia, error, created, cancelled }
+let imgOcrWorker = null;
+let imgPasteBound = false;
+
+function loadOcrLibrary() {
+  if (window.Tesseract) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = OCR_SCRIPT_URL;
+    s.onload = () => (window.Tesseract ? resolve() : reject(new Error("leitor não carregou")));
+    s.onerror = () => reject(new Error("sem conexão com o leitor"));
+    document.head.appendChild(s);
+  });
+}
+
+// lê o arquivo, trata a imagem e devolve um canvas pronto pro leitor de texto
+async function imageFileToOcrCanvas(file) {
+  const bmp = await createImageBitmap(file);
+  const maxW = 2400; // prints de celular têm ~1200px; só reduz imagens gigantes
+  const scale = bmp.width > maxW ? maxW / bmp.width : 1;
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(bmp.width * scale);
+  canvas.height = Math.round(bmp.height * scale);
+  const g = canvas.getContext("2d", { willReadFrequently: true });
+  g.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+  if (bmp.close) bmp.close();
+  const img = g.getImageData(0, 0, canvas.width, canvas.height);
+  ocrPrepareRGBA(img.data);
+  g.putImageData(img, 0, 0);
+  return canvas;
+}
+
+function imgImportEl() { return document.getElementById("img-import-modal"); }
+
+function openImgImport(client) {
+  imgImport = { client, step: "colar", images: [], days: [], dia: 0, error: "", created: [], cancelled: false };
+  imgImportEl().classList.remove("hidden");
+  renderImgImport();
+}
+
+function closeImgImport() {
+  if (imgImport) {
+    imgImport.cancelled = true;
+    imgImport.images.forEach((im) => URL.revokeObjectURL(im.url));
+  }
+  if (imgOcrWorker) {
+    imgOcrWorker.terminate().catch(() => {});
+    imgOcrWorker = null;
+  }
+  imgImport = null;
+  imgImportEl().classList.add("hidden");
+}
+
+function imgAddFiles(files) {
+  if (!imgImport || imgImport.step !== "colar") return;
+  const room = IMG_IMPORT_MAX_IMAGES - imgImport.images.length;
+  const imgs = Array.from(files || []).filter((f) => f && /^image\//.test(f.type)).slice(0, Math.max(0, room));
+  if (imgs.length === 0) {
+    imgImport.error = room <= 0 ? `Máximo de ${IMG_IMPORT_MAX_IMAGES} imagens por vez.` : "Isso não parece ser uma imagem.";
+  } else {
+    imgImport.error = "";
+    imgs.forEach((f) => imgImport.images.push({ id: uid(), file: f, url: URL.createObjectURL(f) }));
+  }
+  renderImgImport();
+}
+
+function imgDraftTotals() {
+  let ex = 0;
+  let days = 0;
+  imgImport.days.forEach((d) => {
+    const n = d.exercises.filter((e) => e.incluir && e.name.trim()).length;
+    if (n > 0) { ex += n; days += 1; }
+  });
+  return { ex, days };
+}
+
+function imgImportButtonLabel() {
+  const t = imgDraftTotals();
+  if (t.ex === 0) return "Importar";
+  return `Importar ${t.ex} exercício${t.ex !== 1 ? "s" : ""} em ${t.days} dia${t.days !== 1 ? "s" : ""}`;
+}
+
+async function imgRead() {
+  const st = imgImport;
+  if (!st || st.images.length === 0) return;
+  st.step = "lendo";
+  st.error = "";
+  st.days = [];
+  st.progressLabel = "";
+  renderImgImport();
+  const setStatus = (txt) => {
+    const el = document.getElementById("ii-status");
+    if (el) el.textContent = txt;
+  };
+  try {
+    setStatus("Carregando o leitor de texto… (na primeira vez demora um pouco)");
+    await loadOcrLibrary();
+    if (st.cancelled) return;
+    imgOcrWorker = await window.Tesseract.createWorker("por", 1, {
+      langPath: OCR_LANG_URL,
+      gzip: true,
+      logger: (m) => {
+        if (m.status === "recognizing text" && st.progressLabel) setStatus(`${st.progressLabel} ${Math.round((m.progress || 0) * 100)}%`);
+      },
+    });
+    for (let i = 0; i < st.images.length; i++) {
+      if (st.cancelled) return;
+      st.progressLabel = `Lendo imagem ${i + 1} de ${st.images.length}…`;
+      setStatus(st.progressLabel);
+      const canvas = await imageFileToOcrCanvas(st.images[i].file);
+      const { data } = await imgOcrWorker.recognize(canvas);
+      canvas.width = 0;
+      const drafts = parseImageWorkoutText(data.text);
+      st.days.push({ id: uid(), imagem: i + 1, title: suggestDayTitle(drafts) || `Treino ${i + 1}`, exercises: drafts });
+    }
+    if (st.cancelled) return;
+    const first = st.days.findIndex((d) => d.exercises.length > 0);
+    if (first < 0) {
+      st.step = "colar";
+      st.error = "Não encontrei exercícios nessas imagens. O leitor espera linhas como \"3 séries · 8–12 repetições\" (ou \"3x8-12\") logo abaixo do nome do exercício.";
+    } else {
+      st.step = "revisar";
+      st.dia = first;
+    }
+  } catch (e) {
+    if (st.cancelled) return;
+    st.step = "colar";
+    st.error = /leitor|conex|network|fetch|load/i.test(String(e && e.message))
+      ? "Não consegui carregar o leitor de texto. Na primeira vez é preciso estar com internet."
+      : "Não consegui ler essas imagens. Tente de novo ou use outra imagem.";
+  } finally {
+    if (imgOcrWorker) { imgOcrWorker.terminate().catch(() => {}); imgOcrWorker = null; }
+  }
+  if (imgImport === st) renderImgImport();
+}
+
+function imgDoImport() {
+  const st = imgImport;
+  if (!st) return;
+  const newDays = [];
+  st.days.forEach((d) => {
+    const exs = d.exercises.filter((e) => e.incluir && e.name.trim()).map(exerciseFromDraft);
+    if (exs.length > 0) newDays.push({ id: uid(), title: (d.title || "").trim() || "Treino importado", exercises: exs });
+  });
+  if (newDays.length === 0) {
+    st.error = "Marque pelo menos um exercício para importar.";
+    renderImgImport();
+    return;
+  }
+  const latest = latestClient(st.client);
+  updateDays(latest, [...(latest.days || []), ...newDays]);
+  st.created = newDays.map((d) => d.id);
+  st.createdInfo = newDays.map((d) => ({ title: d.title, n: d.exercises.length }));
+  st.error = "";
+  st.step = "pronto";
+  renderImgImport();
+}
+
+function imgUndoImport() {
+  const st = imgImport;
+  if (!st || st.created.length === 0) return;
+  const latest = latestClient(st.client);
+  updateDays(latest, (latest.days || []).filter((d) => !st.created.includes(d.id)));
+  st.created = [];
+  st.step = "revisar";
+  renderImgImport();
+}
+
+function renderImgImport() {
+  const card = document.getElementById("ii-card");
+  const st = imgImport;
+  if (!card || !st) return;
+  const err = st.error ? `<div class="ii-error" role="alert">${escapeHTML(st.error)}</div>` : "";
+  const head = (title) => `<div class="im-title">${title}</div>`;
+
+  if (st.step === "colar") {
+    const thumbs = st.images
+      .map(
+        (im, i) => `<div class="ii-thumb">
+          <img src="${im.url}" alt="Imagem ${i + 1}" />
+          <button class="ii-thumb-x" data-act="rm-img" data-id="${im.id}" aria-label="Remover imagem ${i + 1}"><i class="ti ti-x"></i></button>
+          <div class="ii-thumb-n">Imagem ${i + 1}</div>
+        </div>`
+      )
+      .join("");
+    card.innerHTML = `
+      ${head("Importar treino por imagem")}
+      <div class="ii-zone">
+        <i class="ti ti-photo" style="font-size:30px;color:var(--red);"></i>
+        <div style="font-weight:700;">Cole o print do treino aqui</div>
+        <p class="im-hint" style="text-align:center;">No computador, use Ctrl+V. No celular, use os botões abaixo.</p>
+        <button class="ii-btn" data-act="paste"><i class="ti ti-clipboard"></i> Colar da área de transferência</button>
+        <button class="ii-btn ii-btn-ghost" data-act="pick"><i class="ti ti-photo-up"></i> Escolher da galeria</button>
+        <input type="file" id="ii-file" accept="image/*" multiple hidden />
+      </div>
+      ${st.images.length ? `<div class="im-hint">${st.images.length} ${st.images.length === 1 ? "imagem colada" : "imagens coladas"}</div><div class="ii-thumbs">${thumbs}</div>` : ""}
+      <p class="im-hint">Cada imagem vira um dia de treino, e você confere tudo antes de salvar. Só o texto é lido: as figuras dos exercícios não são importadas. A leitura acontece no seu aparelho; a imagem não é enviada para lugar nenhum.</p>
+      ${err}
+      <div class="im-actions">
+        <button class="im-btn-secondary" data-act="close">Cancelar</button>
+        <button class="im-btn-primary" data-act="read" ${st.images.length ? "" : "disabled"}>${st.images.length ? `Ler ${st.images.length} ${st.images.length === 1 ? "imagem" : "imagens"}` : "Ler imagens"}</button>
+      </div>`;
+    return;
+  }
+
+  if (st.step === "lendo") {
+    card.innerHTML = `
+      ${head("Lendo as imagens…")}
+      <div class="ii-wait"><i class="ti ti-loader-2 ii-spin" style="font-size:28px;color:var(--red);"></i>
+        <div id="ii-status" aria-live="polite">Preparando…</div>
+      </div>
+      <div class="im-actions"><button class="im-btn-secondary" data-act="close">Cancelar</button></div>`;
+    return;
+  }
+
+  if (st.step === "revisar") {
+    const tabs = st.days
+      .map((d, i) => `<button class="ii-tab ${i === st.dia ? "on" : ""}" data-act="tab" data-i="${i}" role="tab" aria-selected="${i === st.dia}">Dia ${i + 1}</button>`)
+      .join("");
+    const d = st.days[st.dia];
+    const muscleOpts = (sel) =>
+      `<option value="">Sem grupamento</option>` + MUSCLE_GROUPS.map((m) => `<option value="${m}" ${sel === m ? "selected" : ""}>${m}</option>`).join("");
+    const rows = d.exercises.length
+      ? d.exercises
+          .map(
+            (e) => `<div class="ii-row ${e.incluir ? "" : "off"} ${e.confere ? "warn" : ""}" data-ex="${e.id}">
+        <label class="ii-check"><input type="checkbox" data-f="incluir" ${e.incluir ? "checked" : ""} aria-label="Incluir ${attr(e.name)}" /></label>
+        <div class="ii-fields">
+          <input class="ii-name" data-f="name" value="${attr(e.name)}" aria-label="Nome do exercício" />
+          <div class="ii-line">
+            <input class="ii-num" type="number" inputmode="numeric" min="1" max="12" data-f="count" value="${attr(e.count)}" aria-label="Séries" /><span>séries</span>
+            <input class="ii-reps" type="text" data-f="reps" value="${attr(e.reps)}" placeholder="reps" aria-label="Repetições (ex.: 8-12)" />
+          </div>
+          <select class="ii-sel" data-f="muscle" aria-label="Grupamento muscular">${muscleOpts(e.muscle)}</select>
+          <textarea class="ii-note" rows="1" data-f="note" placeholder="Anotação (opcional)" aria-label="Anotação">${escapeHTML(e.note)}</textarea>
+          ${e.avisos.map((a) => `<div class="ii-aviso"><i class="ti ti-alert-triangle"></i> ${escapeHTML(a)} — confira.</div>`).join("")}
+        </div>
+      </div>`
+          )
+          .join("")
+      : `<div class="ii-empty">Nenhum exercício reconhecido na imagem ${d.imagem}.</div>`;
+    card.innerHTML = `
+      ${head("Conferir antes de importar")}
+      <p class="im-hint">Confira o que foi lido. Desmarque o que não quiser e toque num campo para corrigir. Linhas com <i class="ti ti-alert-triangle" style="color:var(--plate);"></i> merecem atenção.</p>
+      <div class="ii-tabs" role="tablist">${tabs}</div>
+      <label class="ii-daytitle"><span>Nome do dia</span><input type="text" data-f="dayTitle" value="${attr(d.title)}" /></label>
+      <div class="ii-list">${rows}</div>
+      ${err}
+      <div class="im-actions">
+        <button class="im-btn-secondary" data-act="back">Trocar imagens</button>
+        <button class="im-btn-primary" data-act="import" id="ii-import-btn">${escapeHTML(imgImportButtonLabel())}</button>
+      </div>`;
+    return;
+  }
+
+  if (st.step === "pronto") {
+    card.innerHTML = `
+      ${head("Treino importado")}
+      <p class="im-hint">Os dias foram adicionados ao aluno. Cargas e "feito" começam vazios, e você ajusta qualquer exercício como de costume.</p>
+      <div class="ii-done">${(st.createdInfo || []).map((d) => `<div class="ii-done-row"><span>${escapeHTML(d.title)}</span><span>${d.n} exercício${d.n !== 1 ? "s" : ""}</span></div>`).join("")}</div>
+      <div class="im-actions">
+        <button class="im-btn-secondary" data-act="undo">Desfazer importação</button>
+        <button class="im-btn-primary" data-act="close">Pronto</button>
+      </div>`;
+  }
+}
+
+function wireImgImport(client) {
+  const openBtn = document.getElementById("open-img-import");
+  if (openBtn) openBtn.onclick = () => openImgImport(client);
+  if (imgPasteBound) return;
+  imgPasteBound = true;
+
+  const modal = imgImportEl();
+  modal.addEventListener("click", (ev) => {
+    if (!imgImport) return;
+    if (ev.target.id === "ii-backdrop") {
+      if (imgImport.step === "colar" || imgImport.step === "pronto") closeImgImport();
+      return;
+    }
+    const btn = ev.target.closest("[data-act]");
+    if (!btn || btn.disabled) return;
+    const act = btn.dataset.act;
+    if (act === "close") closeImgImport();
+    else if (act === "pick") document.getElementById("ii-file").click();
+    else if (act === "read") imgRead();
+    else if (act === "import") imgDoImport();
+    else if (act === "undo") imgUndoImport();
+    else if (act === "back") { imgImport.step = "colar"; imgImport.error = ""; renderImgImport(); }
+    else if (act === "tab") { imgImport.dia = parseInt(btn.dataset.i, 10) || 0; imgImport.error = ""; renderImgImport(); }
+    else if (act === "rm-img") {
+      const im = imgImport.images.find((x) => x.id === btn.dataset.id);
+      if (im) URL.revokeObjectURL(im.url);
+      imgImport.images = imgImport.images.filter((x) => x.id !== btn.dataset.id);
+      imgImport.error = "";
+      renderImgImport();
+    } else if (act === "paste") {
+      if (!navigator.clipboard || !navigator.clipboard.read) {
+        imgImport.error = "Este navegador não deixa colar por aqui. Use Ctrl+V ou escolha da galeria.";
+        renderImgImport();
+        return;
+      }
+      navigator.clipboard.read().then(async (items) => {
+        const files = [];
+        for (const it of items) {
+          const type = it.types.find((t) => /^image\//.test(t));
+          if (type) files.push(new File([await it.getType(type)], "colado.png", { type }));
+        }
+        if (files.length === 0 && imgImport) { imgImport.error = "Não há imagem copiada na área de transferência."; renderImgImport(); }
+        else imgAddFiles(files);
+      }).catch(() => {
+        if (imgImport) { imgImport.error = "Não consegui acessar a área de transferência. Use Ctrl+V ou escolha da galeria."; renderImgImport(); }
+      });
+    }
+  });
+
+  // edição dos campos da conferência: atualiza o rascunho sem redesenhar (não perde o foco)
+  const onField = (ev) => {
+    const st = imgImport;
+    const el = ev.target;
+    if (!st || st.step !== "revisar" || !el.dataset || !el.dataset.f) return;
+    const day = st.days[st.dia];
+    if (el.dataset.f === "dayTitle") { day.title = el.value; return; }
+    const row = el.closest("[data-ex]");
+    const ex = row && day.exercises.find((x) => x.id === row.dataset.ex);
+    if (!ex) return;
+    const f = el.dataset.f;
+    if (f === "incluir") {
+      if (ev.type !== "change") return;
+      ex.incluir = el.checked;
+      row.classList.toggle("off", !ex.incluir);
+    } else {
+      if (ev.type === "change" && f !== "muscle") return;
+      ex[f] = el.value;
+    }
+    const b = document.getElementById("ii-import-btn");
+    if (b) b.textContent = imgImportButtonLabel();
+  };
+  modal.addEventListener("input", onField);
+  modal.addEventListener("change", (ev) => {
+    if (ev.target.id === "ii-file") {
+      imgAddFiles(ev.target.files);
+      return;
+    }
+    onField(ev);
+  });
+
+  // Ctrl+V em qualquer lugar enquanto a tela está na etapa de colar
+  document.addEventListener("paste", (ev) => {
+    if (!imgImport || imgImport.step !== "colar" || !ev.clipboardData) return;
+    const files = Array.from(ev.clipboardData.items || []).filter((it) => it.kind === "file" && /^image\//.test(it.type)).map((it) => it.getAsFile());
+    if (files.length === 0) return;
+    ev.preventDefault();
+    imgAddFiles(files);
+  });
 }
 
 function openDuplicateModal(sourceName) {
