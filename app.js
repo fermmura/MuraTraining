@@ -3923,7 +3923,20 @@ function progExerciseCardHTML(data, name) {
     <div style="font-size:12px; line-height:1.4; color:var(--muted);">Índice de evolução: a primeira semana do período vale 0%, e cada semana mostra quanto subiu ou desceu em relação a ela. Considera o volume (carga × repetições de todas as séries), então sobe com mais carga, mais repetições ou as duas.</div>`);
 }
 
+// o app recria o objeto `ui` ao entrar (login, troca de aluno), então a Progressão
+// não pode contar com os campos do estado inicial: completa o que faltar
+function progEnsureState() {
+  if (!PROG_PERIODS.some((p) => p.id === ui.progPeriod)) ui.progPeriod = "tudo";
+  if (ui.progMode !== "table") ui.progMode = "evolucao";
+  if (typeof ui.progGroup !== "string" || !ui.progGroup) ui.progGroup = "todos";
+  if (typeof ui.progQ !== "string") ui.progQ = "";
+  if (!ui.progListOpen) ui.progListOpen = false;
+  if (ui.progSel === undefined) ui.progSel = null;
+  if (ui.progMenu !== "periodo" && ui.progMenu !== "grupo") ui.progMenu = null;
+}
+
 function progressionHTML(client) {
+  progEnsureState();
   const rows = buildHistoryIndex(client);
   const weeks = allWeekKeys(client).slice(-8);
   const tab = (id, label) => `<button class="dashed-btn" id="prog-tab-${id}" style="${ui.progMode === id ? "border-style:solid;color:var(--chalk);" : ""}">${label}</button>`;
@@ -4042,6 +4055,7 @@ function progTableHTML(rows, weeks) {
 }
 
 function wireProgression(client) {
+  progEnsureState();
   const backBtn = document.getElementById("prog-back");
   if (backBtn) backBtn.onclick = () => { ui.progOpen = false; ui.progMenu = null; ui.progListOpen = false; render(); };
 
