@@ -1597,7 +1597,7 @@ function clientMuscleVolume(client) {
 }
 
 function clientAreaHTML(client, editable) {
-  if (ui.progOpen) return progressionHTML(client);
+  if (ui.progOpen) return progressionHTML(client, editable);
   if (ui.calendarOpen) return calendarHTML(client, editable);
   if (ui.planWeekKey) return planEditHTML(client, editable);
   if (ui.cardioOpen) return cardioHTML(client, editable);
@@ -1613,7 +1613,11 @@ function clientAreaHTMLInner(client, editable) {
   if (!day) {
     return `
       ${
-        !client.__planId
+        !editable && !client.__planId
+          ? `<div class="day-head">
+              <button class="back" id="back-to-home"><i class="ti ti-chevron-left"></i> Início</button>
+            </div>`
+          : !client.__planId
           ? `<div class="toolbar-nav">
               ${editable ? `<button class="dashed-btn" id="open-calendar"><i class="ti ti-calendar-stats"></i> Calendário</button>` : ""}
               <button class="dashed-btn" id="open-cardio"><i class="ti ti-heart-rate-monitor"></i> Cardio</button>
@@ -2068,6 +2072,15 @@ function wireClientAreaInner(client, editable) {
     wireImgImport(client);
   }
   wirePhotoViewerModal();
+
+  const backHomeBtn = document.getElementById("back-to-home");
+  if (backHomeBtn) {
+    backHomeBtn.onclick = () => {
+      ui.studentEnteredTreinos = false;
+      ui.activeDayId = null;
+      render();
+    };
+  }
 
   const openProgBtn = document.getElementById("open-progression");
   if (openProgBtn) {
@@ -3935,14 +3948,14 @@ function progEnsureState() {
   if (ui.progMenu !== "periodo" && ui.progMenu !== "grupo") ui.progMenu = null;
 }
 
-function progressionHTML(client) {
+function progressionHTML(client, editable) {
   progEnsureState();
   const rows = buildHistoryIndex(client);
   const weeks = allWeekKeys(client).slice(-8);
   const tab = (id, label) => `<button class="dashed-btn" id="prog-tab-${id}" style="${ui.progMode === id ? "border-style:solid;color:var(--chalk);" : ""}">${label}</button>`;
   return `
     <div class="day-head">
-      <button class="back" id="prog-back"><i class="ti ti-chevron-left"></i> Aluno</button>
+      <button class="back" id="prog-back"><i class="ti ti-chevron-left"></i> ${editable ? "Aluno" : "Início"}</button>
       <div class="display day-title">Progressão</div>
     </div>
     <div style="display:flex; gap:8px; margin-bottom:14px; flex-wrap:wrap;">
@@ -4316,7 +4329,7 @@ function cardioHTML(client, editable) {
 
   return `
     <div class="day-head">
-      <button class="back" id="cardio-back"><i class="ti ti-chevron-left"></i> Aluno</button>
+      <button class="back" id="cardio-back"><i class="ti ti-chevron-left"></i> ${editable ? "Aluno" : "Início"}</button>
       <div class="display day-title" style="font-size:18px;">Cardio</div>
     </div>
 
