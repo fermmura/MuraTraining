@@ -61,7 +61,7 @@ let clients = []; // só preenchido para o treinador
 let myClient = null; // só preenchido para o aluno
 let unsubscribe = null;
 
-let ui = { view: "loading", selectedId: null, activeDayId: null, progOpen: false, progMode: "table", progKey: null, studentEnteredTreinos: false, calendarOpen: false, planWeekKey: null, planSaveState: "idle", planSavedAt: null, themeOpen: false, cardioOpen: false, feedbackOpen: false, muscleOpen: false, pastWeekKey: null };
+let ui = { view: "loading", selectedId: null, activeDayId: null, progOpen: false, progMode: "evolucao", progKey: null, progPeriod: "tudo", progGroup: "todos", progQ: "", progListOpen: false, progSel: null, progMenu: null, studentEnteredTreinos: false, calendarOpen: false, planWeekKey: null, planSaveState: "idle", planSavedAt: null, themeOpen: false, cardioOpen: false, feedbackOpen: false, muscleOpen: false, pastWeekKey: null };
 let draggedDayId = null;
 let pendingPlanEdit = null; // rascunho do plano de semana futura em edição { clientId, planId, days }
 let renderQueuedFromSync = false; // redesenho adiado porque havia um campo em uso
@@ -3523,82 +3523,292 @@ function latestInWeek(entries, weekKey) {
   return inWeek.reduce((a, b) => (a.dateKey > b.dateKey ? a : b));
 }
 
+// ---------- aba Progressão: treino inteiro + índice de evolução por exercício ----------
+
+const PROG_PERIODS = [
+  { id: "1m", label: "1 mês", weeks: 4 },
+  { id: "2m", label: "2 meses", weeks: 8 },
+  { id: "3m", label: "3 meses", weeks: 13 },
+  { id: "6m", label: "6 meses", weeks: 26 },
+  { id: "tudo", label: "Tudo (desde o início)", weeks: 0 },
+];
+
+function progNum(v) {
+  const n = parseFloat(String(v == null ? "" : v).replace(",", "."));
+  return isNaN(n) ? 0 : n;
+}
+
+// Tudo que as duas telas precisam, calculado do histórico real:
+//  - sets[semana]: quantas séries distintas tiveram "feito" preenchido
+//  - exercises: por nome, volume da semana = soma de (carga × repetições) de cada série
+//    (série sem carga conta como carga 1, ou seja, só as repetições: peso do corpo)
+// Dentro da mesma semana vale o último registro de cada série.
+function progWeeklyData(client, periodId, today) {
+  const period = PROG_PERIODS.find((p) => p.id === periodId) || PROG_PERIODS[PROG_PERIODS.length - 1];
+  const latest = new Map();
+  for (const h of client.history || []) {
+    if (!h.weekKey || !h.repsDone) continue;
+    const k = h.weekKey + "|" + h.setId;
+    const cur = latest.get(k);
+    if (!cur || (h.dateKey || "") >= (cur.dateKey || "")) latest.set(k, h);
+  }
+  const entries = Array.from(latest.values());
+  if (entries.length === 0) return { weeks: [], sets: {}, exercises: [] };
+
+  const thisWeek = weekKeyOf(today || todayKey());
+  const firstWeek = entries.reduce((m, h) => (h.weekKey < m ? h.weekKey : m), entries[0].weekKey);
+  const windowStart = period.weeks ? addWeeks(thisWeek, -(period.weeks - 1)) : firstWeek;
+  const start = windowStart > firstWeek ? windowStart : firstWeek;
+
+  const sets = {};
+  const volByEx = new Map();
+  for (const h of entries) {
+    if (h.weekKey < start) continue;
+    sets[h.weekKey] = (sets[h.weekKey] || 0) + 1;
+    const name = h.exName || "Exercício";
+    const load = progNum(h.load);
+    const vol = progNum(h.repsDone) * (load > 0 ? load : 1);
+    if (!volByEx.has(name)) volByEx.set(name, {});
+    const byWeek = volByEx.get(name);
+    byWeek[h.weekKey] = (byWeek[h.weekKey] || 0) + vol;
+  }
+
+  const weeks = [];
+  for (let w = start; w <= thisWeek; w = addWeeks(w, 1)) weeks.push(w);
+  // a semana em andamento sem nenhuma série ainda não é "semana sem treino"
+  if (weeks.length > 1 && !sets[thisWeek]) weeks.pop();
+
+  const muscleOf = new Map();
+  for (const d of client.days || []) for (const e of d.exercises || []) if (e.name && e.muscle) muscleOf.set(e.name, e.muscle);
+  const exercises = Array.from(volByEx.entries())
+    .map(([name, byWeek]) => ({ name, muscle: muscleOf.get(name) || guessMuscle(name) || "Outros", byWeek }))
+    .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+  return { weeks, sets, exercises };
+}
+
+// Índice de evolução: a primeira semana do período em que o exercício aparece vale 0%;
+// cada semana seguinte mostra quanto o volume subiu ou desceu em relação a ela.
+function progIndexSeries(byWeek, weeks) {
+  const pts = weeks.filter((w) => byWeek[w] > 0).map((w) => ({ week: w, vol: byWeek[w] }));
+  if (pts.length === 0) return { points: [], last: 0, best: 0 };
+  const base = pts[0].vol;
+  const points = pts.map((p) => ({ week: p.week, value: (p.vol / base - 1) * 100 }));
+  return { points, last: points[points.length - 1].value, best: Math.max(...points.map((p) => p.value)) };
+}
+
+function progLabelNum(v) {
+  if (v >= 1000) return (v / 1000).toFixed(1).replace(".", ",") + "k";
+  return v >= 20 ? String(Math.round(v)) : String(Math.round(v * 10) / 10).replace(".", ",");
+}
+function progLabelPct(v) {
+  return (v > 0.5 ? "+" : "") + Math.round(v) + "%";
+}
+function progPct(v) {
+  const r = Math.round(v);
+  return (r > 0 ? "+" : "") + r + "%";
+}
+
+// gráfico de linha em SVG (sem biblioteca): eixo Y à esquerda, rótulos de semana embaixo
+function progChartHTML(vals, labels, opts) {
+  const { color, pct, ariaLabel } = opts;
+  const W = 274, H = 160, bot = 154, top = 6;
+  const mn = Math.min.apply(null, vals), mx = Math.max.apply(null, vals);
+  const range = mx - mn || 1;
+  const lo = pct ? mn - range * 0.2 : Math.max(0, mn - range * 0.2);
+  const hi = mx + range * 0.2;
+  const n = vals.length;
+  const y = (v) => bot - ((v - lo) / (hi - lo)) * (bot - top);
+  const x = (i) => (n === 1 ? W / 2 : 6 + (i / (n - 1)) * (W - 12));
+  const pts = vals.map((v, i) => [x(i), y(v)]);
+  const line = pts.map((p, i) => (i ? "L" : "M") + p[0].toFixed(1) + " " + p[1].toFixed(1)).join(" ");
+  const area = line + " L" + pts[n - 1][0].toFixed(1) + " " + bot + " L" + pts[0][0].toFixed(1) + " " + bot + " Z";
+  const dots = n <= 14 ? pts.map((p) => "M" + p[0].toFixed(1) + " " + p[1].toFixed(1) + "h0").join(" ") : "";
+  const ys = [0, 1, 2, 3].map((k) => top + (k * (bot - top)) / 3);
+  const grid = ys.map((yy) => "M0 " + yy.toFixed(1) + " H" + W).join(" ");
+  const yLabels = ys
+    .map((yy, k) => {
+      const v = hi - (k * (hi - lo)) / 3;
+      return `<div style="position:absolute; right:0; top:${((yy / H) * 100).toFixed(2)}%; transform:translateY(-50%); font-size:11px; color:var(--muted);">${pct ? progLabelPct(v) : progLabelNum(v)}</div>`;
+    })
+    .join("");
+  const idxs = n <= 5 ? vals.map((_, i) => i) : [0, 1, 2, 3, 4].map((k) => Math.round((k * (n - 1)) / 4));
+  const xLabels = idxs.map((i) => `<div>${escapeHTML(labels[i])}</div>`).join("");
+  return `
+    <div style="display:flex; gap:6px; align-items:stretch;">
+      <div style="position:relative; width:36px; flex-shrink:0;">${yLabels}</div>
+      <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${attr(ariaLabel)}" style="display:block; flex:1; min-width:0; aspect-ratio:${W}/${H};">
+        <path d="${grid}" stroke="#3A3742" stroke-width="1" fill="none"/>
+        <path d="${area}" fill="${color}" fill-opacity="0.12" stroke="none"/>
+        <path d="${line}" fill="none" stroke="${color}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+        ${dots ? `<path d="${dots}" fill="none" stroke="${color}" stroke-width="8" stroke-linecap="round"/>` : ""}
+      </svg>
+    </div>
+    <div style="display:flex; justify-content:space-between; margin-left:42px; font-size:11px; color:var(--muted);">${xLabels}</div>`;
+}
+
+function progMenuHTML(id, label, current, options, extraKey) {
+  // botão + lista suspensa. options: [{id,label,qtd?}]
+  const open = ui.progMenu === id;
+  return `
+    <div style="position:relative;">
+      <button id="prog-${id}-btn" aria-haspopup="listbox" aria-expanded="${open}" style="display:flex; align-items:center; gap:8px; width:100%; min-height:48px; padding:0 14px; border-radius:12px; border:1px solid ${open ? "var(--red)" : "var(--line)"}; background:var(--bg); color:var(--chalk); font-size:15px; text-align:left; box-sizing:border-box;">
+        ${label ? `<span style="color:var(--muted); font-size:13px;">${label}</span>` : ""}
+        <span style="flex-grow:1; font-weight:700;">${escapeHTML(current)}</span>
+        <i class="ti ti-chevron-down"></i>
+      </button>
+      ${
+        open
+          ? `<div id="prog-menu-backdrop" style="position:fixed; inset:0; z-index:9;"></div>
+        <div role="listbox" aria-label="${attr(extraKey)}" style="position:absolute; z-index:10; left:0; right:0; top:54px; max-height:288px; overflow-y:auto; border:1px solid var(--red); border-radius:12px; background:var(--panelAlt); box-shadow:0 10px 24px rgba(0,0,0,0.5);">
+          ${options
+            .map(
+              (o) => `<button role="option" aria-selected="${o.on}" data-prog-pick="${id}" data-value="${attr(o.id)}" style="display:flex; align-items:center; width:100%; min-height:48px; padding:0 14px; border:none; border-top:1px solid var(--line); background:${o.on ? "rgba(255,68,51,0.14)" : "transparent"}; color:var(--chalk); font-size:15px; font-weight:${o.on ? 700 : 400}; text-align:left;">
+                <span style="flex-grow:1;">${escapeHTML(o.label)}</span>
+                ${o.qtd ? `<span style="font-size:12px; color:var(--muted); margin-right:10px;">${escapeHTML(o.qtd)}</span>` : ""}
+                <span style="color:var(--red); font-weight:700; width:14px;">${o.on ? "✓" : ""}</span>
+              </button>`
+            )
+            .join("")}
+        </div>`
+          : ""
+      }
+    </div>`;
+}
+
+function progNormalize(s) {
+  return String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+}
+
+// exercícios que aparecem na lista (grupamento escolhido + texto da busca), por grupamento e em ordem alfabética
+function progListSections(exercises, group, query) {
+  const q = progNormalize(query.trim());
+  const sections = [];
+  for (const e of exercises) {
+    if (group !== "todos" && e.muscle !== group) continue;
+    if (q && progNormalize(e.name).indexOf(q) < 0) continue;
+    let s = sections.find((x) => x.nome === e.muscle);
+    if (!s) { s = { nome: e.muscle, itens: [] }; sections.push(s); }
+    s.itens.push(e);
+  }
+  sections.sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
+  return sections;
+}
+
+function progListInnerHTML(exercises, group, query) {
+  const sections = progListSections(exercises, group, query);
+  if (sections.length === 0) return `<div style="padding:16px 14px; font-size:14px; color:var(--muted);">Nenhum exercício encontrado${group !== "todos" ? " nesse grupamento" : ""}.</div>`;
+  return sections
+    .map(
+      (s) => `<div>
+        <div style="padding:8px 14px 4px 14px; font-size:12px; font-weight:700; color:var(--red);">${escapeHTML(s.nome)}</div>
+        ${s.itens
+          .map(
+            (e) => `<button data-prog-ex="${attr(e.name)}" style="display:flex; align-items:center; gap:10px; width:100%; min-height:48px; padding:0 14px; border:none; border-top:1px solid var(--panelAlt); background:transparent; color:var(--chalk); font-size:15px; text-align:left;">
+              <span style="flex-grow:1;">${escapeHTML(e.name)}</span><i class="ti ti-chevron-right" style="color:var(--muted);"></i>
+            </button>`
+          )
+          .join("")}
+      </div>`
+    )
+    .join("");
+}
+
+function progExerciseCardHTML(data, name) {
+  const ex = data.exercises.find((e) => e.name === name);
+  const title = `<div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+      <div style="font-size:17px; font-weight:700;">${escapeHTML(name)}</div>
+      ${ex ? `<div style="font-size:11px; font-weight:600; padding:3px 8px; border-radius:10px; border:1px solid var(--line); color:var(--muted);">${escapeHTML(ex.muscle)}</div>` : ""}
+    </div>`;
+  const wrap = (inner) => `<div style="border:1px solid #2EE6D6; box-shadow:0 0 12px rgba(46,230,214,0.28); border-radius:16px; background:var(--panel); padding:16px; display:flex; flex-direction:column; gap:14px;">${inner}</div>`;
+  if (!ex) return wrap(`${title}<div style="font-size:13px; color:var(--muted);">Sem registros desse exercício neste período.</div>`);
+  const idx = progIndexSeries(ex.byWeek, data.weeks);
+  if (idx.points.length < 2) {
+    return wrap(`${title}<div style="font-size:13px; color:var(--muted);">Para mostrar a evolução, preciso de pelo menos 2 semanas com esse exercício no período. Por enquanto há ${idx.points.length}.</div>`);
+  }
+  return wrap(`
+    <div style="display:flex; flex-direction:column; gap:4px;">
+      ${title}
+      <div style="font-size:13px; color:var(--muted);">Evolução no período: ${progPct(idx.last)} · melhor semana: ${progPct(idx.best)}</div>
+    </div>
+    ${progChartHTML(idx.points.map((p) => p.value), idx.points.map((p) => weekLabel(p.week)), { color: "#2EE6D6", pct: true, ariaLabel: `Gráfico do índice de evolução de ${name}, em porcentagem` })}
+    <div style="font-size:12px; line-height:1.4; color:var(--muted);">Índice de evolução: a primeira semana do período vale 0%, e cada semana mostra quanto subiu ou desceu em relação a ela. Considera o volume (carga × repetições de todas as séries), então sobe com mais carga, mais repetições ou as duas.</div>`);
+}
+
 function progressionHTML(client) {
   const rows = buildHistoryIndex(client);
   const weeks = allWeekKeys(client).slice(-8);
+  const tab = (id, label) => `<button class="dashed-btn" id="prog-tab-${id}" style="${ui.progMode === id ? "border-style:solid;color:var(--chalk);" : ""}">${label}</button>`;
   return `
     <div class="day-head">
       <button class="back" id="prog-back"><i class="ti ti-chevron-left"></i> Aluno</button>
       <div class="display day-title">Progressão</div>
     </div>
     <div style="display:flex; gap:8px; margin-bottom:14px; flex-wrap:wrap;">
-      <button class="dashed-btn" id="prog-tab-overall" style="${ui.progMode === "overall" ? "border-style:solid;color:var(--chalk);" : ""}">Treino inteiro</button>
-      <button class="dashed-btn" id="prog-tab-table" style="${ui.progMode === "table" ? "border-style:solid;color:var(--chalk);" : ""}">Tabela</button>
-      <button class="dashed-btn" id="prog-tab-chart" style="${ui.progMode === "chart" ? "border-style:solid;color:var(--chalk);" : ""}">Gráfico</button>
+      ${tab("evolucao", "Evolução")}
+      ${tab("table", "Tabela")}
     </div>
     ${
       rows.length === 0
         ? `<p class="muted-note">Ainda não há histórico. Assim que reps ou kg forem alterados pelo aluno (ou por você), a progressão aparece aqui, semana a semana.</p>`
-        : ui.progMode === "overall"
-        ? progOverallHTML(client)
         : ui.progMode === "table"
         ? progTableHTML(rows, weeks)
-        : progChartHTML(rows)
+        : progEvolucaoHTML(client)
     }`;
 }
 
-// visão do treino INTEIRO (todos os exercícios juntos), não um exercício
-// específico — mostra o volume total de séries válidas por semana
-function progOverallHTML(client) {
-  return `
-    <p class="muted-note" style="margin-bottom:14px;">Total de séries válidas (com "feito" preenchido) em TODOS os exercícios, semana a semana — visão geral do progresso do treino inteiro.</p>
-    <div style="position:relative; width:100%; height:240px;">
-      <canvas id="prog-overall-canvas"></canvas>
-    </div>`;
-}
+function progEvolucaoHTML(client) {
+  const data = progWeeklyData(client, ui.progPeriod);
+  const period = PROG_PERIODS.find((p) => p.id === ui.progPeriod) || PROG_PERIODS[PROG_PERIODS.length - 1];
+  const total = data.weeks.reduce((a, w) => a + (data.sets[w] || 0), 0);
+  const trained = data.weeks.filter((w) => data.sets[w] > 0).length;
+  const setsPerWeek = data.weeks.map((w) => data.sets[w] || 0);
 
-function renderOverallChart(client) {
-  const canvas = document.getElementById("prog-overall-canvas");
-  if (!canvas || !window.Chart) return;
-  const byWeek = {};
-  for (const h of client.history || []) {
-    if (!h.repsDone) continue;
-    byWeek[h.weekKey] = (byWeek[h.weekKey] || 0) + 1;
+  const card = (inner) => `<div style="border:1px solid var(--red); box-shadow:0 0 14px rgba(255,68,51,0.35); border-radius:16px; background:var(--panel); padding:16px; display:flex; flex-direction:column; gap:14px; margin-bottom:16px;">${inner}</div>`;
+  const stat = (label, v) => `<div style="flex:1; background:var(--panelAlt); border-radius:12px; padding:10px 12px;"><div style="font-size:11px; color:var(--muted);">${label}</div><div style="font-size:22px; font-weight:700;">${v}</div></div>`;
+
+  const groups = Array.from(new Set(data.exercises.map((e) => e.muscle))).sort((a, b) => a.localeCompare(b, "pt-BR"));
+  if (ui.progGroup !== "todos" && !groups.includes(ui.progGroup)) ui.progGroup = "todos";
+  const groupOpts = [{ id: "todos", label: "Todos os grupamentos", qtd: `${data.exercises.length} exerc.`, on: ui.progGroup === "todos" }].concat(
+    groups.map((g) => ({ id: g, label: g, qtd: `${data.exercises.filter((e) => e.muscle === g).length} exerc.`, on: ui.progGroup === g }))
+  );
+  const periodOpts = PROG_PERIODS.map((p) => ({ id: p.id, label: p.label, on: p.id === period.id }));
+
+  if (!ui.progSel || !data.exercises.some((e) => e.name === ui.progSel)) {
+    const first = progListSections(data.exercises, ui.progGroup, "")[0];
+    ui.progSel = first ? first.itens[0].name : ui.progSel;
   }
-  const weeks = Object.keys(byWeek).sort();
-  const labels = weeks.map(weekLabel);
-  const data = weeks.map((w) => byWeek[w]);
 
-  if (progChartInstance) progChartInstance.destroy();
-  progChartInstance = new Chart(canvas, {
-    type: "line",
-    data: {
-      labels,
-      datasets: [
-        {
-          data,
-          borderColor: "#FF4433",
-          backgroundColor: "rgba(255,68,51,0.1)",
-          fill: true,
-          tension: 0.3,
-          pointRadius: 4,
-          pointBackgroundColor: "#FF4433",
-          pointBorderColor: "#17161A",
-          pointBorderWidth: 2,
-          borderWidth: 2,
-        },
-      ],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      scales: {
-        y: { beginAtZero: true, ticks: { color: "#9A94A6", font: { size: 11 } }, grid: { color: "#2A2830" } },
-        x: { ticks: { color: "#9A94A6", font: { size: 11 } }, grid: { display: false } },
-      },
-    },
-  });
+  return `
+    ${card(`
+      <div style="display:flex; flex-direction:column; gap:3px;">
+        <div style="font-size:17px; font-weight:700;">Evolução do treino inteiro</div>
+        <div style="font-size:12px; line-height:1.4; color:var(--muted);">Séries feitas por semana, somando todos os exercícios.</div>
+      </div>
+      ${progMenuHTML("periodo", "Período", period.label, periodOpts, "Escolher período")}
+      <div style="display:flex; gap:10px;">${stat("Séries no período", total)}${stat("Semanas treinadas", trained)}</div>
+      ${
+        data.weeks.length >= 2
+          ? progChartHTML(setsPerWeek, data.weeks.map(weekLabel), { color: "#FF4433", pct: false, ariaLabel: "Gráfico de séries por semana no período escolhido" })
+          : `<div style="font-size:13px; color:var(--muted);">Para desenhar o gráfico, preciso de pelo menos 2 semanas de treino no período.</div>`
+      }`)}
+    <div style="display:flex; flex-direction:column; gap:4px; margin-bottom:12px;">
+      <h2 style="margin:0; font-size:20px; font-weight:700;">Progressão por exercício</h2>
+      <div style="font-size:12px; line-height:1.4; color:var(--muted);">Escolha o grupamento muscular, depois o exercício. Usa o mesmo período do gráfico acima.</div>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:10px;">
+      <div style="font-size:12px; color:var(--muted);">Grupamento muscular</div>
+      ${progMenuHTML("grupo", "", ui.progGroup === "todos" ? "Todos os grupamentos" : ui.progGroup, groupOpts, "Escolher grupamento muscular")}
+      <label for="prog-q" style="font-size:12px; color:var(--muted);">Buscar exercício</label>
+      <div style="display:flex; align-items:center; gap:10px; min-height:48px; padding:0 14px; border-radius:14px; border:1px solid ${ui.progListOpen ? "var(--red)" : "var(--line)"}; background:var(--panel);">
+        <i class="ti ti-search" style="color:var(--muted);"></i>
+        <input id="prog-q" type="text" value="${attr(ui.progQ)}" placeholder="Digite o nome do exercício" autocomplete="off" style="flex:1; min-width:0; height:46px; background:transparent; border:none; outline:none; color:var(--chalk); font-size:15px;">
+      </div>
+      <div id="prog-list-wrap" style="${ui.progListOpen ? "" : "display:none;"}">
+        <div id="prog-list" style="border:1px solid var(--line); border-radius:14px; background:var(--panel); max-height:330px; overflow-y:auto;">${progListInnerHTML(data.exercises, ui.progGroup, ui.progQ)}</div>
+        <button id="prog-list-close" style="min-height:44px; padding:0 4px; background:transparent; border:none; color:var(--red); font-size:14px; font-weight:600; text-decoration:underline;">Fechar lista</button>
+      </div>
+      <div id="prog-ex-card" style="${ui.progListOpen ? "display:none;" : ""}">${ui.progSel ? progExerciseCardHTML(data, ui.progSel) : ""}</div>
+    </div>`;
 }
 
 function progTableHTML(rows, weeks) {
@@ -3642,94 +3852,61 @@ function progTableHTML(rows, weeks) {
     </div>`;
 }
 
-function progChartHTML(rows) {
-  const selected = ui.progKey && rows.find((r) => r.setId === ui.progKey) ? ui.progKey : rows[0] && rows[0].setId;
-  ui.progKey = selected;
-  return `
-    <select id="prog-select" style="width:100%; margin-bottom:14px; padding:9px; background:var(--panelAlt); border:1px solid var(--line); border-radius:8px; color:var(--chalk); font-size:14px;">
-      ${rows
-        .map((r) => `<option value="${r.setId}" ${r.setId === selected ? "selected" : ""}>${escapeHTML(r.label)}${r.dayTitle ? " — " + escapeHTML(r.dayTitle) : ""}</option>`)
-        .join("")}
-    </select>
-    <div style="position:relative; width:100%; height:240px;">
-      <canvas id="prog-canvas"></canvas>
-    </div>`;
-}
-
-let progChartInstance = null;
-
-function renderProgChart(client) {
-  const canvas = document.getElementById("prog-canvas");
-  if (!canvas || !window.Chart) return;
-  const entries = (client.history || []).filter((h) => h.setId === ui.progKey);
-  const byWeek = {};
-  for (const e of entries) {
-    if (!byWeek[e.weekKey] || e.dateKey > byWeek[e.weekKey].dateKey) byWeek[e.weekKey] = e;
-  }
-  const weeks = Object.keys(byWeek).sort();
-  const labels = weeks.map(weekLabel);
-  const useLoad = weeks.some((w) => byWeek[w].load);
-  const data = weeks.map((w) => {
-    const v = useLoad ? byWeek[w].load : byWeek[w].repsDone;
-    const n = parseFloat(String(v).replace(",", "."));
-    return isNaN(n) ? null : n;
-  });
-
-  if (progChartInstance) progChartInstance.destroy();
-  progChartInstance = new Chart(canvas, {
-    type: "line",
-    data: {
-      labels,
-      datasets: [
-        {
-          data,
-          borderColor: "#FF4433",
-          backgroundColor: "rgba(255,68,51,0.1)",
-          fill: true,
-          tension: 0.3,
-          pointRadius: 4,
-          pointBackgroundColor: "#FF4433",
-          pointBorderColor: "#17161A",
-          pointBorderWidth: 2,
-          borderWidth: 2,
-          spanGaps: true,
-        },
-      ],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      scales: {
-        y: { ticks: { color: "#9A94A6", font: { size: 11 } }, grid: { color: "#2A2830" } },
-        x: { ticks: { color: "#9A94A6", font: { size: 11 } }, grid: { display: false } },
-      },
-    },
-  });
-}
-
 function wireProgression(client) {
   const backBtn = document.getElementById("prog-back");
-  if (backBtn) backBtn.onclick = () => { ui.progOpen = false; render(); };
+  if (backBtn) backBtn.onclick = () => { ui.progOpen = false; ui.progMenu = null; ui.progListOpen = false; render(); };
 
-  const tabOverall = document.getElementById("prog-tab-overall");
+  const tabEvo = document.getElementById("prog-tab-evolucao");
   const tabTable = document.getElementById("prog-tab-table");
-  const tabChart = document.getElementById("prog-tab-chart");
-  if (tabOverall) tabOverall.onclick = () => { ui.progMode = "overall"; render(); };
-  if (tabTable) tabTable.onclick = () => { ui.progMode = "table"; render(); };
-  if (tabChart) tabChart.onclick = () => { ui.progMode = "chart"; render(); };
+  if (tabEvo) tabEvo.onclick = () => { ui.progMode = "evolucao"; ui.progMenu = null; render(); };
+  if (tabTable) tabTable.onclick = () => { ui.progMode = "table"; ui.progMenu = null; render(); };
 
-  if (ui.progMode === "overall") {
-    renderOverallChart(client);
-  }
+  if (ui.progMode === "table") return;
 
-  if (ui.progMode === "chart") {
-    const select = document.getElementById("prog-select");
-    if (select) {
-      select.onchange = () => { ui.progKey = select.value; render(); };
-      renderProgChart(client);
-    }
+  for (const id of ["periodo", "grupo"]) {
+    const btn = document.getElementById(`prog-${id}-btn`);
+    if (btn) btn.onclick = () => { ui.progMenu = ui.progMenu === id ? null : id; render(); };
   }
+  const backdrop = document.getElementById("prog-menu-backdrop");
+  if (backdrop) backdrop.onclick = () => { ui.progMenu = null; render(); };
+  document.querySelectorAll("[data-prog-pick]").forEach((b) => {
+    b.onclick = () => {
+      if (b.dataset.progPick === "periodo") ui.progPeriod = b.dataset.value;
+      else { ui.progGroup = b.dataset.value; ui.progListOpen = true; }
+      ui.progMenu = null;
+      render();
+    };
+  });
+
+  const wrap = document.getElementById("prog-list-wrap");
+  const exCard = document.getElementById("prog-ex-card");
+  const list = document.getElementById("prog-list");
+  const q = document.getElementById("prog-q");
+  const showList = (open) => {
+    ui.progListOpen = open;
+    if (wrap) wrap.style.display = open ? "" : "none";
+    if (exCard) exCard.style.display = open ? "none" : "";
+  };
+  if (q) {
+    q.onfocus = () => showList(true);
+    q.oninput = () => {
+      ui.progQ = q.value;
+      showList(true);
+      if (list) list.innerHTML = progListInnerHTML(progWeeklyData(client, ui.progPeriod).exercises, ui.progGroup, ui.progQ);
+    };
+  }
+  if (list) {
+    list.onclick = (e) => {
+      const b = e.target.closest("[data-prog-ex]");
+      if (!b) return;
+      ui.progSel = b.dataset.progEx;
+      ui.progListOpen = false;
+      ui.progQ = "";
+      render();
+    };
+  }
+  const closeBtn = document.getElementById("prog-list-close");
+  if (closeBtn) closeBtn.onclick = () => { ui.progQ = ""; if (q) q.value = ""; if (list) list.innerHTML = progListInnerHTML(progWeeklyData(client, ui.progPeriod).exercises, ui.progGroup, ""); showList(false); };
 }
 
 // ---------- calendário de semanas ----------
