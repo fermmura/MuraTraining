@@ -121,7 +121,7 @@
 
   .ex-card { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; }
   .ex-top { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
-  .ex-name { flex: 1; font-size: 16px; font-weight: 600; }
+  .ex-name { flex: 1; min-width: 0; font-size: 16px; font-weight: 600; }
   .ex-toggle { color: var(--muted); font-size: 22px; flex-shrink: 0; transition: transform .15s ease; padding: 4px 8px; }
   .ex-toggle.collapsed { transform: rotate(-90deg); }
   .muscle-select { background: var(--panelAlt); color: var(--muted); border: 1px solid var(--line); border-radius: 6px;
@@ -270,6 +270,17 @@
   #img-import-modal .ii-done-row { display: flex; justify-content: space-between; gap: 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); padding: 12px 14px; font-size: 14px; font-weight: 700; }
   #img-import-modal .ii-done-row span:last-child { font-weight: 400; font-size: 12px; color: var(--muted); }
 
+  #swap-modal.hidden { display: none; }
+  #swap-modal { position: fixed; inset: 0; z-index: 76; }
+  #swap-modal .im-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.65); }
+  #swap-modal .im-card { position: absolute; left: 0; right: 0; bottom: 0; max-width: 520px; margin: 0 auto; max-height: 92vh; overflow-y: auto;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 18px 18px 0 0; padding: 18px; display: flex; flex-direction: column; gap: 12px; }
+  #swap-modal .im-title { font-size: 17px; font-weight: 700; }
+  #swap-modal .im-hint { font-size: 12px; color: var(--muted); line-height: 1.5; margin: 0; }
+  #swap-modal .im-actions { display: flex; justify-content: flex-end; gap: 10px; position: sticky; bottom: -18px; background: var(--panel); padding: 10px 0 2px; }
+  #swap-modal .im-btn-secondary { color: var(--muted); padding: 11px 14px; font-size: 14px; min-height: 44px; }
+  #swap-modal .im-btn-primary { background: var(--red); color: #fff; border-radius: 10px; padding: 11px 18px; font-size: 14px; font-weight: 700; min-height: 44px; }
+  #swap-modal .im-btn-primary:disabled { opacity: .4; }
   /* visualizador de foto em tela cheia */
   #photo-viewer-modal.hidden { display: none; }
   #photo-viewer-modal { position: fixed; inset: 0; z-index: 80; }
@@ -309,6 +320,11 @@
   <div id="img-import-modal" class="hidden">
     <div class="im-backdrop" id="ii-backdrop"></div>
     <div class="im-card" id="ii-card" role="dialog" aria-modal="true" aria-label="Importar treino por imagem"></div>
+  </div>
+
+  <div id="swap-modal" class="hidden">
+    <div class="im-backdrop" id="sw-backdrop"></div>
+    <div class="im-card" id="sw-card" role="dialog" aria-modal="true" aria-label="Trocar exercício"></div>
   </div>
 
   <div id="dup-modal" class="hidden">

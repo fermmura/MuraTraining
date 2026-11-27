@@ -408,7 +408,9 @@ function resetWeekFlags(days, newWeekKey) {
     return {
       ...dayRest,
       ...(shortOn && !flagIsStale(shortOn, newWeekKey) ? { shortOn } : {}),
-      exercises: (d.exercises || []).map((ex) => {
+      exercises: (d.exercises || []).map((original) => {
+        // troca de exercício feita em semana anterior: volta ao original
+        const ex = original.swap && flagIsStale(original.swap.week, newWeekKey) ? restoreSwap(original) : original;
         const { shortKeep, ...rest } = ex;
         return shortKeep && !flagIsStale(shortKeep, newWeekKey) ? { ...rest, shortKeep } : rest;
       }),
@@ -417,7 +419,96 @@ function resetWeekFlags(days, newWeekKey) {
 }
 
 function hasWeekFlags(days) {
-  return (days || []).some((d) => d.shortOn || (d.exercises || []).some((ex) => ex.shortKeep));
+  return (days || []).some((d) => d.shortOn || (d.exercises || []).some((ex) => ex.shortKeep || ex.swap));
+}
+
+// ---------- troca de exercício (aluno escolhe uma alternativa aprovada) ----------
+// O treinador cadastra em `ex.alts` os nomes que o aluno pode usar no lugar. Ao
+// trocar, o exercício ganha o nome novo, mesmas séries/metas, mas SEM carga,
+// "feito" nem referência esmaecida (o histórico dele começa do zero) e com ids
+// novos de série (o registro do original no histórico não é sobrescrito).
+// Tudo do original fica guardado em `ex.swap.from` e `ex.swap.week` diz de que
+// semana é a troca: na virada de semana (`resetWeekFlags`) o original volta.
+const SWAP_REASONS = ["Aparelho ocupado", "Desconforto ou dor", "Não tenho na minha academia", "Outro"];
+const SWAP_KEYS = ["photoUrl", "hasPhoto", "videoUrl", "studentNote", "studentNoteAt"];
+const SWAP_MAX_ALTS = 8;
+
+const swapKey = (s) => String(s || "").trim().toLowerCase();
+
+function swapOriginalName(ex) {
+  return ex && ex.swap && ex.swap.from && ex.swap.from.name ? ex.swap.from.name : ex ? ex.name : "";
+}
+
+// alternativas que o aluno enxerga: as cadastradas, sem repetir e sem o próprio exercício
+function swapOptions(ex) {
+  const skip = new Set([swapKey(ex.name), swapKey(swapOriginalName(ex))]);
+  const out = [];
+  for (const a of Array.isArray(ex.alts) ? ex.alts : []) {
+    const name = String(a || "").trim();
+    if (!name || skip.has(swapKey(name))) continue;
+    skip.add(swapKey(name));
+    out.push(name);
+  }
+  return out;
+}
+
+function restoreSwap(ex) {
+  if (!ex || !ex.swap) return ex;
+  const { swap, ...rest } = ex;
+  const f = swap.from || {};
+  const out = { ...rest };
+  if (f.name !== undefined) out.name = f.name;
+  if (f.sets) out.sets = f.sets;
+  for (const k of SWAP_KEYS) {
+    delete out[k];
+    if (f[k] !== undefined) out[k] = f[k];
+  }
+  return out;
+}
+
+function applySwap(ex, altName, reason, weekKey) {
+  const orig = restoreSwap(ex);
+  const from = { name: orig.name || "", sets: orig.sets || [] };
+  const next = { ...orig };
+  for (const k of SWAP_KEYS) {
+    if (orig[k] !== undefined) from[k] = orig[k];
+    delete next[k];
+  }
+  next.name = String(altName).trim();
+  next.sets = (orig.sets || []).map((s) => ({
+    id: uid(),
+    repsGoal: s.repsGoal ?? s.reps ?? "",
+    repsDone: "",
+    load: "",
+    intensity: s.intensity || 0,
+    rir: "",
+    rirEnabled: !!s.rirEnabled,
+  }));
+  next.swap = { week: weekKey, reason: String(reason || ""), from };
+  return next;
+}
+
+// sugestões para o treinador: nomes que ele já usa nos treinos dos alunos, do mesmo grupamento
+function swapSuggestions(allClients, ex, limit = 5) {
+  if (!ex || !ex.muscle) return [];
+  const have = new Set([swapKey(ex.name), swapKey(swapOriginalName(ex)), ...(ex.alts || []).map(swapKey)]);
+  const count = new Map();
+  for (const c of allClients || []) {
+    for (const d of c.days || []) {
+      for (const e of d.exercises || []) {
+        const base = e.swap && e.swap.from ? { ...e, name: e.swap.from.name } : e;
+        if (!base.name || base.muscle !== ex.muscle || have.has(swapKey(base.name))) continue;
+        const k = swapKey(base.name);
+        const cur = count.get(k) || { name: base.name.trim(), n: 0 };
+        cur.n++;
+        count.set(k, cur);
+      }
+    }
+  }
+  return Array.from(count.values())
+    .sort((a, b) => b.n - a.n || a.name.localeCompare(b.name, "pt-BR"))
+    .slice(0, limit)
+    .map((x) => x.name);
 }
 
 // semana do último registro do aluno, ignorando semanas futuras (registros
@@ -1713,6 +1804,56 @@ function leftOutExerciseHTML(ex) {
     </div>`;
 }
 
+// faixa que aparece no exercício trocado (aluno e treinador)
+function swapBannerHTML(ex, editable) {
+  const from = swapOriginalName(ex);
+  return `
+    <div class="notes-box" style="margin:8px 0;border-color:var(--red);">
+      <div style="font-size:13px;font-weight:700;color:var(--red);">Trocado nesta semana · era ${escapeHTML(from)}</div>
+      <div class="muted-note" style="font-size:12px;margin:4px 0 8px;">${
+        editable
+          ? `O aluno trocou${ex.swap.reason ? ` (${escapeHTML(ex.swap.reason)})` : ""}. Na próxima semana volta ao original. Você pode desfazer agora.`
+          : "O histórico deste exercício começa do zero. Seu personal recebeu o aviso da troca. Na próxima semana volta ao original."
+      }</div>
+      <button type="button" class="dashed-btn" data-swapundo="${ex.id}" style="min-height:44px;"><i class="ti ti-arrow-back-up"></i> Desfazer troca</button>
+    </div>`;
+}
+
+// editor do treinador: quais trocas o aluno pode fazer neste exercício
+function altsEditorHTML(ex) {
+  const alts = Array.isArray(ex.alts) ? ex.alts.filter(Boolean) : [];
+  const sugg = swapSuggestions(clients, ex);
+  return `
+    <div class="notes-box" style="margin-bottom:10px;">
+      <label>TROCAS PERMITIDAS</label>
+      <p class="muted-note" style="font-size:12px;margin:0 0 8px;">O aluno só enxerga estas opções. Sem nenhuma, o botão Trocar não aparece.</p>
+      ${alts
+        .map(
+          (a) => `<div style="display:flex;align-items:center;gap:8px;min-height:44px;border-top:1px solid var(--line);">
+            <div style="flex-grow:1;font-size:14px;">${escapeHTML(a)}</div>
+            <button type="button" class="rm-x" data-altrm="${ex.id}" data-alt="${attr(a)}" aria-label="Remover ${attr(a)}"><i class="ti ti-x"></i></button>
+          </div>`
+        )
+        .join("")}
+      ${
+        alts.length < SWAP_MAX_ALTS
+          ? `<div style="display:flex;gap:6px;margin-top:6px;">
+              <input data-altinput="${ex.id}" enterkeyhint="done" placeholder="Nome do exercício permitido" style="flex:1;min-width:0;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:9px 10px;color:var(--chalk);font-size:14px;" />
+              <button type="button" class="dashed-btn" data-altadd="${ex.id}" style="min-height:44px;">Adicionar</button>
+            </div>`
+          : `<p class="muted-note" style="font-size:12px;">Máximo de ${SWAP_MAX_ALTS} trocas.</p>`
+      }
+      ${
+        sugg.length && alts.length < SWAP_MAX_ALTS
+          ? `<div style="margin-top:8px;"><div class="muted-note" style="font-size:11px;margin-bottom:4px;">Sugestões (mesmo grupamento, dos seus treinos)</div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;">${sugg
+                .map((n) => `<button type="button" class="dashed-btn" data-altsug="${ex.id}" data-alt="${attr(n)}" style="min-height:44px;font-size:13px;">+ ${escapeHTML(n)}</button>`)
+                .join("")}</div></div>`
+          : ""
+      }
+    </div>`;
+}
+
 function exerciseHTML(ex, editable, index, total, client, day) {
   if (!editable && day && !exerciseActive(day, ex)) return leftOutExerciseHTML(ex);
   const collapsed = isCollapsed(ex.id);
@@ -1737,9 +1878,15 @@ function exerciseHTML(ex, editable, index, total, client, day) {
               </span>`
             : ""
         }
+        ${
+          !editable && !client.__planId && (swapOptions(ex).length > 0 || ex.swap)
+            ? `<button type="button" class="dashed-btn" data-swapopen="${ex.id}" aria-label="Trocar exercício" style="min-height:44px;padding:0 12px;color:var(--red);border-color:var(--red);"><i class="ti ti-arrows-exchange"></i> Trocar</button>`
+            : ""
+        }
         ${editable ? `<button class="rm-x" data-rmex="${ex.id}"><i class="ti ti-x"></i></button>` : ""}
         <button class="ex-toggle ${collapsed ? "collapsed" : ""}" data-toggle="${ex.id}" aria-label="Abrir/fechar exercício">▾</button>
       </div>
+      ${ex.swap && !client.__planId ? swapBannerHTML(ex, editable) : ""}
       ${
         !editable && day && day.shortOn && ex.shortKeep && !ex.priority
           ? `<button type="button" class="dashed-btn" data-shortkeep="${ex.id}" data-keep="0" style="min-height:44px;"><i class="ti ti-eye-off"></i> Deixar de fora de novo</button>`
@@ -1796,6 +1943,7 @@ function exerciseHTML(ex, editable, index, total, client, day) {
               : ""
           }
         </div>
+        ${editable ? altsEditorHTML(ex) : ""}
         <div>
           <label style="font-size:11px;font-weight:700;color:var(--muted);">SÉRIES DE TRABALHO</label>
           ${(ex.sets || []).map((s, i) => {
@@ -2194,6 +2342,47 @@ function wireClientAreaInner(client, editable) {
       );
       updateDays(client, days);
     };
+  });
+
+  // troca de exercício
+  document.querySelectorAll("[data-swapopen]").forEach((btn) => {
+    btn.onclick = () => openSwapSheet(client, ui.activeDayId, btn.dataset.swapopen);
+  });
+  document.querySelectorAll("[data-swapundo]").forEach((btn) => {
+    btn.onclick = () => undoSwap(client, ui.activeDayId, btn.dataset.swapundo, !editable);
+  });
+  const editAlts = (exId, fn) => {
+    const days = (latestClient(client).days || []).map((d) =>
+      d.id === ui.activeDayId ? { ...d, exercises: (d.exercises || []).map((ex) => (ex.id === exId ? fn(ex) : ex)) } : d
+    );
+    updateDays(client, days);
+  };
+  const addAlt = (exId, raw) => {
+    const name = String(raw || "").trim();
+    if (!name) return;
+    editAlts(exId, (ex) => {
+      const cur = Array.isArray(ex.alts) ? ex.alts : [];
+      const dup = new Set([swapKey(ex.name), swapKey(swapOriginalName(ex)), ...cur.map(swapKey)]);
+      if (dup.has(swapKey(name)) || cur.length >= SWAP_MAX_ALTS) return ex;
+      return { ...ex, alts: [...cur, name] };
+    });
+  };
+  document.querySelectorAll("[data-altadd]").forEach((btn) => {
+    btn.onclick = () => {
+      const input = btn.parentElement.querySelector("[data-altinput]");
+      addAlt(btn.dataset.altadd, input && input.value);
+    };
+  });
+  document.querySelectorAll("[data-altinput]").forEach((input) => {
+    input.onkeydown = (e) => {
+      if (e.key === "Enter") { e.preventDefault(); addAlt(input.dataset.altinput, input.value); }
+    };
+  });
+  document.querySelectorAll("[data-altsug]").forEach((btn) => {
+    btn.onclick = () => addAlt(btn.dataset.altsug, btn.dataset.alt);
+  });
+  document.querySelectorAll("[data-altrm]").forEach((btn) => {
+    btn.onclick = () => editAlts(btn.dataset.altrm, (ex) => ({ ...ex, alts: (ex.alts || []).filter((a) => swapKey(a) !== swapKey(btn.dataset.alt)) }));
   });
 
   document.querySelectorAll("[data-toggle]").forEach((btn) => {
@@ -4206,6 +4395,151 @@ function wireCardio(client, editable) {
       saveClient(client.id, { cardio: next });
     };
   });
+}
+
+// ---------- troca de exercício: folha do aluno e gravação ----------
+
+let swapUI = null;
+let swapBound = false;
+const swapModalEl = () => document.getElementById("swap-modal");
+
+function swapReasonText(st) {
+  if (!st.reason) return "";
+  if (st.reason !== "Outro") return st.reason;
+  const t = (st.other || "").trim();
+  return t ? `Outro: ${t}` : "";
+}
+
+function swapFindExercise(st) {
+  const c = latestClient(st.client);
+  const day = (c.days || []).find((d) => d.id === st.dayId);
+  return { c, ex: day && (day.exercises || []).find((e) => e.id === st.exId) };
+}
+
+function openSwapSheet(client, dayId, exId) {
+  swapUI = { client, dayId, exId, reason: "", other: "", alt: "" };
+  renderSwapSheet();
+  swapModalEl().classList.remove("hidden");
+  wireSwapSheet();
+}
+
+function closeSwapSheet() {
+  swapUI = null;
+  swapModalEl().classList.add("hidden");
+}
+
+function renderSwapSheet() {
+  const st = swapUI;
+  if (!st) return;
+  const { ex } = swapFindExercise(st);
+  const card = document.getElementById("sw-card");
+  if (!ex) { closeSwapSheet(); return; }
+  const opts = swapOptions(ex);
+  const hasDone = (ex.sets || []).some((s) => s.repsDone || s.load);
+  const ready = !!swapReasonText(st) && !!st.alt && opts.includes(st.alt);
+  const chip = (on, extra) => `border:1px solid ${on ? "var(--red)" : "var(--line)"};background:${on ? "rgba(255,68,51,0.14)" : "transparent"};color:var(--chalk);font-weight:${on ? 700 : 500};${extra || ""}`;
+  card.innerHTML = `
+    <div class="im-title">Trocar ${escapeHTML(swapOriginalName(ex))}</div>
+    <p class="im-hint">Opções aprovadas pelo seu personal: mesmo músculo e mesmas séries.</p>
+    <div style="font-size:13px;font-weight:700;">Por que você quer trocar? (obrigatório)</div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;">
+      ${SWAP_REASONS.map((r) => `<button type="button" data-swreason="${attr(r)}" aria-pressed="${st.reason === r}" style="min-height:44px;padding:0 14px;border-radius:12px;font-size:14px;${chip(st.reason === r)}">${escapeHTML(r)}</button>`).join("")}
+    </div>
+    ${
+      st.reason === "Outro"
+        ? `<div style="display:flex;flex-direction:column;gap:4px;"><label for="sw-other" style="font-size:12px;color:var(--muted);">Escreva o motivo (obrigatório)</label>
+            <input id="sw-other" type="text" value="${attr(st.other)}" placeholder="Ex.: ombro incomodando" style="background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:0 12px;min-height:46px;color:var(--chalk);font-size:15px;" /></div>`
+        : ""
+    }
+    <div style="font-size:13px;font-weight:700;">Trocar por</div>
+    <div style="display:flex;flex-direction:column;gap:8px;">
+      ${opts.map((a) => `<button type="button" data-swalt="${attr(a)}" aria-pressed="${st.alt === a}" style="min-height:52px;padding:0 14px;border-radius:12px;font-size:15px;text-align:left;${chip(st.alt === a)}">${escapeHTML(a)}</button>`).join("")}
+    </div>
+    ${hasDone ? `<p class="im-hint">O que você já preencheu neste exercício fica guardado e volta se você desfizer a troca.</p>` : ""}
+    <p class="im-hint">Vale só nesta semana. Na próxima volta ao exercício original.</p>
+    <div class="im-actions">
+      <button type="button" id="sw-cancel" class="im-btn-secondary">Cancelar</button>
+      <button type="button" id="sw-confirm" class="im-btn-primary" ${ready ? "" : "disabled"}>Confirmar troca</button>
+    </div>`;
+}
+
+function wireSwapSheet() {
+  if (swapBound) return;
+  swapBound = true;
+  const root = swapModalEl();
+  root.addEventListener("click", (e) => {
+    if (!swapUI) return;
+    if (e.target.id === "sw-backdrop" || e.target.closest("#sw-cancel")) return closeSwapSheet();
+    const r = e.target.closest("[data-swreason]");
+    if (r) { swapUI.reason = r.dataset.swreason; renderSwapSheet(); const o = document.getElementById("sw-other"); if (o) o.focus(); return; }
+    const a = e.target.closest("[data-swalt]");
+    if (a) { swapUI.alt = a.dataset.swalt; renderSwapSheet(); return; }
+    if (e.target.closest("#sw-confirm")) {
+      const st = swapUI;
+      const reason = swapReasonText(st);
+      if (!reason || !st.alt) return;
+      doSwap(st.client, st.dayId, st.exId, st.alt, reason);
+      closeSwapSheet();
+    }
+  });
+  root.addEventListener("input", (e) => {
+    if (!swapUI || e.target.id !== "sw-other") return;
+    swapUI.other = e.target.value;
+    const btn = document.getElementById("sw-confirm");
+    if (btn) btn.disabled = !(swapReasonText(swapUI) && swapUI.alt);
+  });
+}
+
+function swapFeedback(c, text) {
+  return { id: uid(), dateKey: todayKey(), from: "aluno", text, read: false };
+}
+
+// grava a troca e avisa o treinador pelo feedback do aluno
+function doSwap(client, dayId, exId, altName, reason) {
+  const c = latestClient(client);
+  if (c.__planId) return;
+  const week = weekKeyOf(todayKey());
+  let from = "";
+  let changed = false;
+  const days = (c.days || []).map((d) =>
+    d.id !== dayId
+      ? d
+      : {
+          ...d,
+          exercises: (d.exercises || []).map((ex) => {
+            if (ex.id !== exId || !swapOptions(ex).includes(altName)) return ex;
+            from = swapOriginalName(ex);
+            changed = true;
+            return applySwap(ex, altName, reason, week);
+          }),
+        }
+  );
+  if (!changed) return;
+  const entry = swapFeedback(c, `Troquei ${from} por ${altName}. Motivo: ${reason}.`);
+  saveClient(c.id, { days, feedback: [...(c.feedback || []), entry] });
+}
+
+function undoSwap(client, dayId, exId, notify) {
+  const c = latestClient(client);
+  if (c.__planId) return;
+  let name = "";
+  const days = (c.days || []).map((d) =>
+    d.id !== dayId
+      ? d
+      : {
+          ...d,
+          exercises: (d.exercises || []).map((ex) => {
+            if (ex.id !== exId || !ex.swap) return ex;
+            const back = restoreSwap(ex);
+            name = back.name;
+            return back;
+          }),
+        }
+  );
+  if (!name) return;
+  const patch = { days };
+  if (notify) patch.feedback = [...(c.feedback || []), swapFeedback(c, `Desfiz a troca e voltei para ${name}.`)];
+  saveClient(c.id, patch);
 }
 
 // ---------- feedbacks / observações ----------
