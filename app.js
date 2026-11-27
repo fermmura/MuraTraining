@@ -276,7 +276,8 @@ function isTimerRunning(day) {
 // campo, como referência. Se a série não foi feita na semana que passou, a
 // referência anterior continua valendo (sempre o ÚLTIMO treino feito).
 function cloneDaysWithNewIds(days, resetDone = true, photoPairs = null, carryGhost = false) {
-  return (days || []).map((d) => {
+  // as marcas do treino curto valem só pra semana em que o aluno as fez
+  return resetWeekFlags(days, SEMPRE).map((d) => {
     // `timerStartedAt` é estado da SESSÃO daquele dia, não faz parte do treino —
     // se ele viajar junto pra uma cópia/semana nova, o treino nasce já marcado
     // como "em andamento", com o cronômetro contando desde outro dia.
@@ -376,7 +377,7 @@ function withDoneReset(client, days, newWeekKey) {
   for (const h of client.history || []) {
     if (h.setId && h.repsDone && h.weekKey && h.weekKey >= newWeekKey) doneThisWeek.add(h.setId);
   }
-  return (days || []).map((d) => ({
+  return resetWeekFlags(days, newWeekKey).map((d) => ({
     ...d,
     exercises: (d.exercises || []).map((ex) => ({
       ...ex,
@@ -390,6 +391,33 @@ function withDoneReset(client, days, newWeekKey) {
 
 function hasAnyRepsDone(days) {
   return (days || []).some((d) => (d.exercises || []).some((ex) => (ex.sets || []).some((s) => s.repsDone)));
+}
+
+// Marcas que só valem na semana em que foram feitas: o aluno ligou o treino
+// curto (`day.shortOn`) ou reativou um exercício (`ex.shortKeep`). Guardam a
+// semana em que foram marcadas, então a virada só apaga as de semanas
+// anteriores — uma marca feita já na semana nova (virada que chegou atrasada)
+// fica como está. Pra apagar tudo (cópia pra semana seguinte ou outro aluno),
+// passe `SEMPRE`.
+const SEMPRE = "9999-12-31";
+const flagIsStale = (v, newWeekKey) => typeof v !== "string" || v < newWeekKey;
+
+function resetWeekFlags(days, newWeekKey) {
+  return (days || []).map((d) => {
+    const { shortOn, ...dayRest } = d;
+    return {
+      ...dayRest,
+      ...(shortOn && !flagIsStale(shortOn, newWeekKey) ? { shortOn } : {}),
+      exercises: (d.exercises || []).map((ex) => {
+        const { shortKeep, ...rest } = ex;
+        return shortKeep && !flagIsStale(shortKeep, newWeekKey) ? { ...rest, shortKeep } : rest;
+      }),
+    };
+  });
+}
+
+function hasWeekFlags(days) {
+  return (days || []).some((d) => d.shortOn || (d.exercises || []).some((ex) => ex.shortKeep));
 }
 
 // semana do último registro do aluno, ignorando semanas futuras (registros
@@ -432,12 +460,12 @@ async function maybePromoteWeek(client, fromCache = false) {
       const nextPlans = plans.filter((p) => p.id !== plan.id);
       // limpeza: planos salvos antes da correção podem ter vindo com o
       // cronômetro de outro dia colado neles. A semana nova sempre começa parada.
-      const freshDays = withRefLoads(client, plan.days, plan.weekKey).map((d) => {
+      const freshDays = resetWeekFlags(withRefLoads(client, plan.days, plan.weekKey), currentKey).map((d) => {
         const { timerStartedAt, ...rest } = d;
         return rest;
       });
       patch = { days: freshDays, activeWeekKey: currentKey, weekPlans: nextPlans };
-    } else if (hasAnyRepsDone(client.days)) {
+    } else if (hasAnyRepsDone(client.days) || hasWeekFlags(client.days)) {
       patch = { days: withDoneReset(client, client.days, currentKey), activeWeekKey: currentKey };
     } else {
       // nada pra zerar: não regrava `days`, só troca a etiqueta
@@ -1347,9 +1375,21 @@ function startWorkoutClock() {
   workoutClockInterval = setInterval(tick, 1000);
 }
 
-function dayVolume(day) {
+// Treino curto: o treinador marca quais exercícios são `priority`. Quando o
+// aluno liga o modo curto do dia (`day.shortOn`), os que não são prioridade
+// ficam de fora hoje — sem sair do plano — a não ser que ele reative um por um
+// (`ex.shortKeep`). Os dois campos só valem na semana em que foram marcados:
+// a virada da semana apaga (veja `resetWeekFlags`).
+function exerciseActive(day, ex) {
+  return !(day && day.shortOn && !ex.priority && !ex.shortKeep);
+}
+
+// `activeOnly`: o aluno vê o contador só do que ele vai fazer hoje (treino curto
+// completo = 100%). O treinador vê tudo, pra enxergar o que ficou abaixo do plano.
+function dayVolume(day, activeOnly = false) {
   let total = 0, done = 0;
   for (const ex of day.exercises || []) {
+    if (activeOnly && !exerciseActive(day, ex)) continue;
     for (const s of ex.sets || []) {
       total++;
       if (s.repsDone) done++;
@@ -1440,9 +1480,10 @@ function addMuscleCount(byMuscle, muscle, weight, done) {
   if (done) byMuscle[muscle].done += weight;
 }
 
-function muscleVolume(day) {
+function muscleVolume(day, activeOnly = false) {
   const byMuscle = {};
   for (const ex of day.exercises || []) {
+    if (activeOnly && !exerciseActive(day, ex)) continue;
     for (const s of ex.sets || []) {
       addMuscleCount(byMuscle, ex.muscle, 1, !!s.repsDone);
       addMuscleCount(byMuscle, ex.synergist, 0.5, !!s.repsDone);
@@ -1509,7 +1550,7 @@ function clientAreaHTMLInner(client, editable) {
       <div class="grid ${editable ? "" : "stacked"}">
         ${(client.days || [])
           .map((d, dayIdx, dayArr) => {
-            const vol = dayVolume(d);
+            const vol = dayVolume(d, !editable);
             const lastSession = [...(client.workoutSessions || [])].filter((s) => s.dayId === d.id).sort((a, b) => b.endedAt - a.endedAt)[0];
             const sessionLine = isTimerRunning(d)
               ? `<div class="count" style="color:var(--red);display:flex;align-items:center;gap:3px;"><i class="ti ti-player-play" style="font-size:10px;"></i> em andamento</div>`
@@ -1555,9 +1596,9 @@ function clientAreaHTMLInner(client, editable) {
     </div>
     ${
       (() => {
-        const vol = dayVolume(day);
+        const vol = dayVolume(day, !editable);
         if (vol.total === 0) return "";
-        const byMuscle = muscleVolume(day);
+        const byMuscle = muscleVolume(day, !editable);
         const totalLine = `<div class="muted-note" style="margin:-10px 0 8px; color:${vol.done === vol.total ? "#639922" : "var(--muted)"};">${vol.done}/${vol.total} séries feitas</div>`;
         const muscleLine =
           byMuscle.length > 0
@@ -1573,6 +1614,7 @@ function clientAreaHTMLInner(client, editable) {
         return totalLine + muscleLine;
       })()
     }
+    ${shortModeHTML(day, editable, client)}
     ${
       !isTimerRunning(day)
         ? `<button type="button" class="cta" id="start-workout" style="display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:14px;">
@@ -1581,7 +1623,7 @@ function clientAreaHTMLInner(client, editable) {
         : ""
     }
     <div id="exercises-wrap">
-      ${(day.exercises || []).map((ex, i, arr) => exerciseHTML(ex, editable, i, arr.length, client)).join("")}
+      ${(day.exercises || []).map((ex, i, arr) => exerciseHTML(ex, editable, i, arr.length, client, day)).join("")}
     </div>
     ${editable ? `<button class="dashed-btn" id="add-exercise">+ adicionar exercício</button>` : ""}
     ${
@@ -1625,7 +1667,53 @@ function studentNoteHTML(ex) {
     </div>`;
 }
 
-function exerciseHTML(ex, editable, index, total, client) {
+// bloco do topo do treino: o aluno escolhe entre treino completo e curto; o
+// treinador só vê o resumo e se o aluno ligou o modo curto hoje. Só aparece
+// quando o treinador marcou alguma prioridade, mas não todas.
+function shortModeHTML(day, editable, client) {
+  if (client.__planId) return "";
+  const exs = day.exercises || [];
+  const prio = exs.filter((e) => e.priority);
+  if (!prio.length || prio.length === exs.length) return "";
+  const count = (list) => list.reduce((n, e) => n + (e.sets || []).length, 0);
+  const on = !!day.shortOn;
+  const active = exs.filter((e) => exerciseActive(day, e));
+  const summary = `${active.length} exercício${active.length !== 1 ? "s" : ""} · ${count(active)} séries`;
+  if (editable) {
+    return `<div class="muted-note" style="margin:-4px 0 12px;display:flex;align-items:center;gap:6px;">
+        <i class="ti ti-star-filled" style="color:var(--red);font-size:12px;"></i>
+        ${on ? `O aluno ligou o treino curto neste treino (${summary}).` : `Treino curto: ${prio.length} exercício${prio.length !== 1 ? "s" : ""} prioritário${prio.length !== 1 ? "s" : ""} (${count(prio)} séries).`}
+      </div>`;
+  }
+  const btn = (mode, label, selected) =>
+    `<button type="button" class="dashed-btn" data-shortmode="${mode}" aria-pressed="${selected}" style="flex:1;justify-content:center;min-height:44px;${selected ? "background:var(--redDim);border:1px solid var(--red);color:var(--chalk);font-weight:700;" : ""}">${label}</button>`;
+  return `
+    <div id="short-mode" style="background:var(--panel);border:1px solid ${on ? "var(--red)" : "var(--line)"};border-radius:12px;padding:12px;margin-bottom:14px;">
+      <div style="font-size:13px;font-weight:700;margin-bottom:2px;">Quanto tempo você tem hoje?</div>
+      <div class="muted-note" style="margin-bottom:10px;">${summary}</div>
+      <div style="display:flex;gap:8px;">
+        ${btn("off", "Treino completo", !on)}
+        ${btn("on", "Treino curto", on)}
+      </div>
+      ${on ? `<div class="muted-note" style="margin-top:8px;">O que ficou de fora continua no seu plano. Toque em Reativar se quiser fazer algum.</div>` : ""}
+    </div>`;
+}
+
+// exercício que ficou de fora do treino curto: cartão enxuto, com a opção de
+// trazer de volta
+function leftOutExerciseHTML(ex) {
+  return `
+    <div class="ex-card" data-exid="${ex.id}" style="opacity:.6;">
+      <div class="ex-top">
+        <div class="ex-name">${escapeHTML(ex.name || "Exercício")}</div>
+        <span class="muscle-tag">Fica de fora hoje</span>
+      </div>
+      <button type="button" class="dashed-btn" data-shortkeep="${ex.id}" data-keep="1" style="margin-top:8px;min-height:44px;"><i class="ti ti-arrow-back-up"></i> Reativar</button>
+    </div>`;
+}
+
+function exerciseHTML(ex, editable, index, total, client, day) {
+  if (!editable && day && !exerciseActive(day, ex)) return leftOutExerciseHTML(ex);
   const collapsed = isCollapsed(ex.id);
   return `
     <div class="ex-card" data-exid="${ex.id}">
@@ -1634,6 +1722,11 @@ function exerciseHTML(ex, editable, index, total, client) {
           editable
             ? `<input class="ex-name" data-field="name" enterkeyhint="done" placeholder="Exercício" value="${attr(ex.name)}" />`
             : `<div class="ex-name">${escapeHTML(ex.name || "Exercício")}</div>`
+        }
+        ${
+          editable && !client.__planId
+            ? `<button class="move-btn" data-prio="${ex.id}" aria-pressed="${!!ex.priority}" aria-label="${ex.priority ? "Prioridade no treino curto: tocar para tirar" : "Marcar como prioridade no treino curto"}" title="${ex.priority ? "Prioridade no treino curto" : "Marcar como prioridade no treino curto"}"><i class="ti ${ex.priority ? "ti-star-filled" : "ti-star"}" style="${ex.priority ? "color:var(--red);" : ""}"></i></button>`
+            : ""
         }
         ${
           editable
@@ -1646,6 +1739,11 @@ function exerciseHTML(ex, editable, index, total, client) {
         ${editable ? `<button class="rm-x" data-rmex="${ex.id}"><i class="ti ti-x"></i></button>` : ""}
         <button class="ex-toggle ${collapsed ? "collapsed" : ""}" data-toggle="${ex.id}" aria-label="Abrir/fechar exercício">▾</button>
       </div>
+      ${
+        !editable && day && day.shortOn && ex.shortKeep && !ex.priority
+          ? `<button type="button" class="dashed-btn" data-shortkeep="${ex.id}" data-keep="0" style="min-height:44px;"><i class="ti ti-eye-off"></i> Deixar de fora de novo</button>`
+          : ""
+      }
       ${
         editable
           ? `<div style="display:flex; gap:6px; flex-wrap:wrap;">
@@ -2042,6 +2140,55 @@ function wireClientAreaInner(client, editable) {
       if (!confirm(`Excluir "${exName}"? Essa ação não pode ser desfeita.`)) return;
       const days = (client.days || []).map((d) =>
         d.id === ui.activeDayId ? { ...d, exercises: (d.exercises || []).filter((ex) => ex.id !== btn.dataset.rmex) } : d
+      );
+      updateDays(client, days);
+    };
+  });
+
+  // treino curto: estrela do treinador (prioridade), botões do aluno (completo /
+  // curto) e Reativar. Cada gravação parte da versão mais nova da ficha.
+  document.querySelectorAll("[data-prio]").forEach((btn) => {
+    btn.onclick = () => {
+      const exId = btn.dataset.prio;
+      const days = (latestClient(client).days || []).map((d) =>
+        d.id === ui.activeDayId
+          ? { ...d, exercises: (d.exercises || []).map((ex) => (ex.id === exId ? { ...ex, priority: !ex.priority } : ex)) }
+          : d
+      );
+      updateDays(client, days);
+    };
+  });
+
+  document.querySelectorAll("[data-shortmode]").forEach((btn) => {
+    btn.onclick = () => {
+      const on = btn.dataset.shortmode === "on";
+      const days = (latestClient(client).days || []).map((d) => {
+        if (d.id !== ui.activeDayId) return d;
+        if (on) return { ...d, shortOn: weekKeyOf(todayKey()) };
+        // voltar ao completo limpa as reativações: o treino inteiro volta
+        const { shortOn, ...rest } = d;
+        return { ...rest, exercises: (d.exercises || []).map(({ shortKeep, ...ex }) => ex) };
+      });
+      updateDays(client, days);
+    };
+  });
+
+  document.querySelectorAll("[data-shortkeep]").forEach((btn) => {
+    btn.onclick = () => {
+      const exId = btn.dataset.shortkeep;
+      const keep = btn.dataset.keep === "1";
+      const days = (latestClient(client).days || []).map((d) =>
+        d.id === ui.activeDayId
+          ? {
+              ...d,
+              exercises: (d.exercises || []).map((ex) => {
+                if (ex.id !== exId) return ex;
+                if (keep) return { ...ex, shortKeep: weekKeyOf(todayKey()) };
+                const { shortKeep, ...rest } = ex;
+                return rest;
+              }),
+            }
+          : d
       );
       updateDays(client, days);
     };
